@@ -201,9 +201,12 @@ body {
   <div class="tab-content" id="tab-data" style="display:none">
     <div class="card">
       <h2>已保存卡片数据</h2>
-      <input class="filter-input" type="text" id="dataFilter" placeholder="过滤名称..." oninput="filterData()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <input class="filter-input" type="text" id="dataFilter" placeholder="过滤名称..." oninput="filterData()" style="flex:1;margin-bottom:0;min-width:200px">
+        <button class="btn btn-danger btn-sm" id="batchDelBtn" onclick="batchDelete()" style="display:none">删除选中</button>
+      </div>
       <div class="table-wrap"><table><thead>
-        <tr><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>二手最低价</th><th>Listing</th><th>发布日期</th></tr>
+        <tr><th style="width:32px"><input type="checkbox" id="dataSelectAll" onchange="toggleDataAll()"></th><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>二手最低价</th><th>Listing</th><th>操作</th></tr>
       </thead><tbody id="dataTableBody"></tbody></table></div>
       <div class="empty" id="dataEmpty">暂无数据，请先搜索并爬取卡片</div>
     </div>
@@ -408,7 +411,8 @@ function filterData() {
 
   const tbody = document.getElementById('dataTableBody');
   tbody.innerHTML = filtered.map(c => `
-    <tr>
+    <tr data-id="${c.id}">
+      <td><input type="checkbox" class="data-check" value="${c.id}" onchange="updateBatchDelBtn()"></td>
       <td class="text-muted">${c.id}</td>
       <td>
         <div style="display:flex;align-items:center;gap:10px">
@@ -424,9 +428,55 @@ function filterData() {
       <td><strong>$${c.min_price ?? '?'}</strong></td>
       <td>${c.used_min_price_format || '-'}</td>
       <td>${c.listing_count ?? '0'}</td>
-      <td class="text-muted">${c.release_date ? c.release_date.slice(0,10) : '-'}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteCard('${c.id}')" style="padding:4px 8px;font-size:11px">删除</button></td>
     </tr>
   `).join('');
+  updateBatchDelBtn();
+}
+
+// ============================================================
+//  删除数据
+// ============================================================
+function updateBatchDelBtn() {
+  const checked = document.querySelectorAll('.data-check:checked').length;
+  const btn = document.getElementById('batchDelBtn');
+  btn.style.display = checked ? 'inline-flex' : 'none';
+  btn.textContent = `删除选中 (${checked})`;
+}
+
+function toggleDataAll() {
+  const checked = document.getElementById('dataSelectAll').checked;
+  document.querySelectorAll('.data-check').forEach(cb => cb.checked = checked);
+  updateBatchDelBtn();
+}
+
+async function deleteCard(id) {
+  if (!confirm(`确定要删除 ID=${id} 的卡片吗？`)) return;
+  await _doDelete([id]);
+}
+
+async function batchDelete() {
+  const ids = Array.from(document.querySelectorAll('.data-check:checked')).map(cb => cb.value);
+  if (!ids.length) return;
+  if (!confirm(`确定要删除选中的 ${ids.length} 张卡片吗？`)) return;
+  await _doDelete(ids);
+}
+
+async function _doDelete(ids) {
+  try {
+    const res = await fetch('/api/data/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({card_ids: ids}),
+    });
+    const data = await res.json();
+    if (data.error) return toast(data.error, 'error');
+    toast(data.message, 'success');
+    loadData();
+    loadStats();
+  } catch(e) {
+    toast('删除失败: ' + e.message, 'error');
+  }
 }
 
 // ============================================================

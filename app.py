@@ -81,6 +81,41 @@ def api_data():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/data/delete", methods=["POST"])
+def api_data_delete():
+    """删除指定卡片数据"""
+    data = request.get_json()
+    card_ids = data.get("card_ids", [])
+
+    if not card_ids:
+        return jsonify({"error": "请提供要删除的卡片 ID"}), 400
+
+    data_file = os.path.join(DATA_DIR, "trading_cards.json")
+    if not os.path.exists(data_file):
+        return jsonify({"success": True, "deleted": 0, "message": "暂无数据"})
+
+    try:
+        with open(data_file, "r", encoding="utf-8") as f:
+            cards = json.load(f)
+
+        id_set = set(card_ids)
+        before = len(cards)
+        cards = [c for c in cards if c.get("id") not in id_set]
+        deleted = before - len(cards)
+
+        with open(data_file, "w", encoding="utf-8") as f:
+            json.dump(cards, f, ensure_ascii=False, indent=2)
+
+        return jsonify({
+            "success": True,
+            "deleted": deleted,
+            "remaining": len(cards),
+            "message": f"已删除 {deleted} 张卡片" if deleted else "未找到匹配的卡片",
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/search-results")
 def api_search_results():
     """获取最后一次搜索结果"""
@@ -178,6 +213,7 @@ def _do_crawl(card_ids):
 
     try:
         scraper = CardScraper(delay=0.8, output_dir=DATA_DIR)
+        new_cards = []
 
         for i, cid in enumerate(card_ids):
             if not crawl_status["running"]:
@@ -191,20 +227,33 @@ def _do_crawl(card_ids):
 
             if data:
                 crawl_status["match"] += 1
+                new_cards.append(data)
 
             time.sleep(0.8)
 
-        # 保存结果
-        all_cards = []
+        # 合并保存结果
         data_file = os.path.join(DATA_DIR, "trading_cards.json")
+        all_cards = []
         if os.path.exists(data_file):
             with open(data_file, "r", encoding="utf-8") as f:
                 all_cards = json.load(f)
 
-        # 只保留本次爬取的新结果（简单策略：用已存在的合并）
-        # 这里把新爬取的追加进去
-        # 实际上 scrape_cards 已有 save 逻辑，我们直接用
-        crawl_status["progress"] = "爬取完成!"
+        # 按 ID 去重合并（新数据覆盖旧数据）
+        existing_ids = {c["id"] for c in all_cards if "id" in c}
+        for nc in new_cards:
+            if nc.get("id") in existing_ids:
+                # 替换已有
+                for i, ec in enumerate(all_cards):
+                    if ec.get("id") == nc["id"]:
+                        all_cards[i] = nc
+                        break
+            else:
+                all_cards.append(nc)
+
+        with open(data_file, "w", encoding="utf-8") as f:
+            json.dump(all_cards, f, ensure_ascii=False, indent=2)
+
+        crawl_status["progress"] = f"爬取完成！新增/更新 {len(new_cards)} 张卡片"
 
     except Exception as e:
         crawl_status["progress"] = f"错误: {e}"
@@ -219,4 +268,4 @@ def _do_crawl(card_ids):
 if __name__ == "__main__":
     print(f"启动 Web UI: http://127.0.0.1:5000")
     print(f"数据目录: {DATA_DIR}")
-    app.run(debug=True, host="127.0.0.1", port=5000)
+    app.run(debug=False, host="127.0.0.1", port=5000)
