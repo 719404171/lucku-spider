@@ -1,0 +1,18 @@
+{
+  "generated_at": "2026-06-09T15:42:28.358929",
+  "total_cards": 95,
+  "cards_with_listings": 88,
+  "cards_without_listings": 7,
+  "price_summary": {
+    "overall_min_price": 0,
+    "overall_max_price": 1706,
+    "overall_avg_used_min_price": 170.33
+  },
+  "condition_breakdown": {},
+  "sample_listings": [],
+  "limitations": [
+    "各 Condition (A/B/C/D) 的逐级价格需要访问单个 listing 页面",
+    "单个 listing URL 需通过浏览器开发者工具从 /used 页面获取",
+    "本报告基于卡片页面 :summary 中的聚合数据生成"
+  ]
+}

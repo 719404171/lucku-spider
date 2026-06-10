@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SNKRDUNK 交易卡爬虫</title>
+<style>
+  :root {
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --bg: #0f172a;
+    --bg-card: #1e293b;
+    --bg-input: #334155;
+    --text: #f1f5f9;
+    --text-muted: #94a3b8;
+    --border: #334155;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --radius: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* Image Modal */
+.modal {
+  display: none; position: fixed; z-index: 1000; left: 0; top: 0;
+  width: 100%; height: 100%; background: rgba(0,0,0,.85);
+  justify-content: center; align-items: center; cursor: pointer;
+}
+.modal.active { display: flex; }
+.modal-content {
+  max-width: 90vw; max-height: 90vh; text-align: center;
+  cursor: default; position: relative;
+}
+.modal-content img {
+  max-width: 100%; max-height: 80vh; border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+}
+.modal-title {
+  color: #fff; padding: 12px 0; font-size: 16px; font-weight: 600;
+  text-shadow: 0 2px 8px rgba(0,0,0,.5);
+}
+.modal-close {
+  position: fixed; top: 20px; right: 30px; color: #fff;
+  font-size: 40px; font-weight: bold; cursor: pointer; z-index: 1001;
+  transition: opacity .2s;
+}
+.modal-close:hover { opacity: .7; }
+  .header {
+    background: linear-gradient(135deg, var(--primary), #a855f7);
+    padding: 20px 0;
+    text-align: center;
+  }
+  .header h1 { font-size: 24px; font-weight: 700; }
+  .header p { color: rgba(255,255,255,0.8); font-size: 14px; margin-top: 4px; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--bg-card); border-radius: var(--radius); padding: 4px; }
+  .tab-btn {
+    flex: 1; padding: 10px 16px; border: none; background: transparent;
+    color: var(--text-muted); cursor: pointer; border-radius: 6px;
+    font-size: 14px; transition: all .2s;
+  }
+  .tab-btn:hover { color: var(--text); background: rgba(255,255,255,.05); }
+  .tab-btn.active { color: #fff; background: var(--primary); }
+
+  /* Cards */
+  .card { background: var(--bg-card); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; border: 1px solid var(--border); }
+  .card h2 { font-size: 18px; margin-bottom: 16px; }
+
+  /* Forms */
+  .form-row { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .form-row input, .form-row select {
+    padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-input); color: var(--text); font-size: 14px; flex: 1; min-width: 200px;
+  }
+  .form-row input:focus, .form-row select:focus { outline: none; border-color: var(--primary); }
+
+  .btn {
+    padding: 10px 20px; border: none; border-radius: var(--radius);
+    cursor: pointer; font-size: 14px; font-weight: 600; transition: all .2s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-success { background: var(--success); color: #fff; }
+  .btn-success:hover { background: #16a34a; }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover { background: #dc2626; }
+  .btn-sm { padding: 6px 12px; font-size: 12px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Tables */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: var(--bg-input); color: var(--text-muted); font-weight: 600; position: sticky; top: 0; }
+  tr:hover td { background: rgba(99,102,241,.08); }
+  .text-muted { color: var(--text-muted); }
+  .text-right { text-align: right; }
+
+  /* Stats */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; text-align: center; }
+  .stat-card .num { font-size: 28px; font-weight: 700; color: var(--primary); }
+  .stat-card .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+  /* Progress */
+  .progress-wrap { background: var(--bg-input); border-radius: 99px; height: 8px; overflow: hidden; margin: 12px 0; }
+  .progress-bar { height: 100%; background: var(--primary); border-radius: 99px; transition: width .3s; }
+  .status-msg { font-size: 13px; color: var(--text-muted); }
+
+  /* Badge */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+  .badge-info { background: rgba(99,102,241,.2); color: #818cf8; }
+  .badge-success { background: rgba(34,197,94,.2); color: #4ade80; }
+
+  /* Filter input */
+  .filter-input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); font-size: 13px; margin-bottom: 12px; }
+
+  /* Checkbox */
+  input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; cursor: pointer; }
+
+  /* Empty state */
+  .empty { text-align: center; padding: 40px; color: var(--text-muted); }
+
+  .loading { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--text-muted); border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; border-radius: var(--radius); color: #fff; font-size: 14px; z-index: 999; animation: slideIn .3s; }
+  .toast-success { background: var(--success); }
+  .toast-error { background: var(--danger); }
+  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>SNKRDUNK 交易卡爬虫</h1>
+  <p>搜索、浏览、爬取 SNKRDUNK 交易卡数据</p>
+</div>
+
+<div class="container">
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="search">🔍 搜索</button>
+    <button class="tab-btn" data-tab="data">📦 数据 (0)</button>
+    <button class="tab-btn" data-tab="stats">📊 统计</button>
+  </div>
+
+  <!-- Tab: Search -->
+  <div class="tab-content" id="tab-search">
+    <div class="card">
+      <h2>搜索交易卡</h2>
+      <div class="form-row">
+        <input type="text" id="searchInput" placeholder="关键词，如: sv8 pikachu 136" value=""
+               onkeydown="if(event.key==='Enter') doSearch()">
+        <select id="maxResults">
+          <option value="20">20 条</option>
+          <option value="50" selected>50 条</option>
+          <option value="100">100 条</option>
+          <option value="200">200 条</option>
+        </select>
+        <button class="btn btn-primary" onclick="doSearch()">搜索</button>
+      </div>
+    </div>
+
+    <!-- Crawl Status -->
+    <div class="card" id="crawlStatus" style="display:none">
+      <h2>爬取进度</h2>
+      <div class="progress-wrap"><div class="progress-bar" id="crawlProgress"></div></div>
+      <div class="status-msg" id="crawlMsg"></div>
+    </div>
+
+    <!-- Search Results -->
+    <div class="card" id="searchResults" style="display:none">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <h2 style="margin:0">搜索结果</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="text-muted" id="resultCount"></span>
+          <button class="btn btn-success btn-sm" id="crawlBtn" onclick="crawlSelected()">爬取选中</button>
+          <label style="font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="selectAll" onchange="toggleAll()"> 全选
+          </label>
+        </div>
+      </div>
+      <div class="table-wrap"><table><thead>
+        <tr><th style="width:32px"></th><th>ID</th><th style="min-width:280px">名称</th><th>最低价</th><th>Listing</th></tr>
+      </thead><tbody id="searchTableBody"></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- Tab: Data -->
+  <div class="tab-content" id="tab-data" style="display:none">
+    <div class="card">
+      <h2>已保存卡片数据</h2>
+      <input class="filter-input" type="text" id="dataFilter" placeholder="过滤名称..." oninput="filterData()">
+      <div class="table-wrap"><table><thead>
+        <tr><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>二手最低价</th><th>Listing</th><th>发布日期</th></tr>
+      </thead><tbody id="dataTableBody"></tbody></table></div>
+      <div class="empty" id="dataEmpty">暂无数据，请先搜索并爬取卡片</div>
+    </div>
+  </div>
+</div>
+
+<!-- Image Modal -->
+<div id="imageModal" class="modal" onclick="closeImage()">
+  <span class="modal-close">&times;</span>
+  <div class="modal-content" onclick="event.stopPropagation()">
+    <div class="modal-title" id="modalTitle"></div>
+    <img id="modalImage" src="" alt="">
+  </div>
+</div>
+
+<!-- Tab: Stats -->
+<div class="tab-content" id="tab-stats" style="display:none">
+  <div class="stats-grid" id="statsGrid"></div>
+  <div class="card"><h2>品牌分布</h2><div id="brandChart"></div></div>
+</div>
+
+</div> <!-- end container -->
+
+<script>
+// ============================================================
+//  Tab 切换
+// ============================================================
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).style.display = 'block';
+    if (btn.dataset.tab === 'data') loadData();
+    if (btn.dataset.tab === 'stats') loadStats();
+  });
+});
+
+// ============================================================
+//  搜索
+// ============================================================
+let searchResults = [];
+
+async function doSearch() {
+  const keyword = document.getElementById('searchInput').value.trim();
+  const max = document.getElementById('maxResults').value;
+  if (!keyword) return toast('请输入关键词', 'error');
+
+  const btn = document.querySelector('.btn-primary');
+  btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 搜索中...';
+
+  try {
+    const res = await fetch(`/api/search?keyword=${encodeURIComponent(keyword)}&max=${max}`);
+    const data = await res.json();
+    if (data.error) { toast(data.error, 'error'); searchResults = []; }
+    else { searchResults = data.results; }
+  } catch(e) {
+    toast('搜索失败: ' + e.message, 'error');
+    searchResults = [];
+  }
+
+  btn.disabled = false; btn.textContent = '搜索';
+  renderSearchResults(searchResults);
+}
+
+function renderSearchResults(results) {
+  const el = document.getElementById('searchResults');
+  const tbody = document.getElementById('searchTableBody');
+  const count = document.getElementById('resultCount');
+
+  if (!results.length) {
+    el.style.display = 'none';
+    return;
+  }
+
+  el.style.display = 'block';
+  count.textContent = `共 ${results.length} 张卡片`;
+
+  tbody.innerHTML = results.map(r => `
+    <tr>
+      <td><input type="checkbox" class="card-check" value="${r.id}"></td>
+      <td class="text-muted">${r.id}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          <img src="${r.thumbnail_url || ''}?size=s" 
+               onerror="this.style.display='none'"
+               style="width:40px;height:56px;object-fit:cover;border-radius:4px;cursor:pointer"
+               onclick="showImage('${r.thumbnail_url || ''}?size=l', '${escapeHtml(r.card_name||'').replace(/'/g, "\\'")}')"
+               alt="">
+          <a href="https://snkrdunk.com/en/trading-cards/${r.id}" target="_blank" style="color:#818cf8;text-decoration:none">${escapeHtml(r.card_name||'')}</a>
+        </div>
+      </td>
+      <td><strong>$${r.min_price ?? '?'}</strong></td>
+      <td>${r.listing_count ?? '0'}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('selectAll').checked = false;
+  document.getElementById('crawlBtn').textContent = `爬取选中 (${results.length})`;
+}
+
+// ============================================================
+//  全选
+// ============================================================
+function toggleAll() {
+  const checked = document.getElementById('selectAll').checked;
+  document.querySelectorAll('.card-check').forEach(cb => cb.checked = checked);
+  updateCrawlBtn();
+}
+
+// ============================================================
+//  爬取
+// ============================================================
+async function crawlSelected() {
+  const ids = Array.from(document.querySelectorAll('.card-check:checked')).map(cb => cb.value);
+  if (!ids.length) return toast('请先选择要爬取的卡片', 'error');
+
+  const btn = document.getElementById('crawlBtn');
+  btn.disabled = true; btn.textContent = '爬取中...';
+
+  const statusEl = document.getElementById('crawlStatus');
+  statusEl.style.display = 'block';
+
+  try {
+    const res = await fetch('/api/crawl', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({card_ids: ids}),
+    });
+    const data = await res.json();
+    if (data.error) { toast(data.error, 'error'); return; }
+
+    // 轮询进度
+    pollCrawlStatus(ids.length);
+  } catch(e) {
+    toast('启动爬取失败: ' + e.message, 'error');
+    btn.disabled = false; btn.textContent = '爬取选中';
+  }
+}
+
+function pollCrawlStatus(total) {
+  const progressBar = document.getElementById('crawlProgress');
+  const msg = document.getElementById('crawlMsg');
+  const btn = document.getElementById('crawlBtn');
+
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch('/api/crawl/status');
+      const status = await res.json();
+
+      const pct = total > 0 ? Math.round(status.done / total * 100) : 0;
+      progressBar.style.width = pct + '%';
+      msg.textContent = `[${status.done}/${total}] ${status.progress}`;
+
+      if (!status.running || status.done >= total) {
+        clearInterval(interval);
+        btn.disabled = false; btn.textContent = '爬取选中';
+        toast(`爬取完成: 共处理 ${total} 张`, 'success');
+        loadData();
+        loadStats();
+        setTimeout(() => {
+          document.getElementById('crawlStatus').style.display = 'none';
+        }, 3000);
+      }
+    } catch(e) {
+      clearInterval(interval);
+    }
+  }, 1000);
+}
+
+// ============================================================
+//  加载数据
+// ============================================================
+async function loadData() {
+  try {
+    const res = await fetch('/api/data');
+    const data = await res.json();
+    if (data.error) return;
+
+    // 更新 tab 计数
+    document.querySelectorAll('.tab-btn')[1].textContent = `📦 数据 (${data.count})`;
+
+    const tbody = document.getElementById('dataTableBody');
+    const empty = document.getElementById('dataEmpty');
+
+    if (!data.cards.length) {
+      tbody.innerHTML = '';
+      empty.style.display = 'block';
+      return;
+    }
+
+    empty.style.display = 'none';
+    window._allData = data.cards;
+    filterData();
+  } catch(e) {}
+}
+
+function filterData() {
+  const filter = document.getElementById('dataFilter').value.toLowerCase();
+  const cards = window._allData || [];
+  const filtered = filter ? cards.filter(c => (c.card_name||'').toLowerCase().includes(filter)) : cards;
+
+  const tbody = document.getElementById('dataTableBody');
+  tbody.innerHTML = filtered.map(c => `
+    <tr>
+      <td class="text-muted">${c.id}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          <img src="${c.thumbnail_url || ''}?size=s" 
+               onerror="this.style.display='none'"
+               style="width:40px;height:56px;object-fit:cover;border-radius:4px;cursor:pointer"
+               onclick="showImage('${c.thumbnail_url || ''}?size=l', '${escapeHtml(c.card_name||'').replace(/'/g, "\\'")}')"
+               alt="">
+          <a href="https://snkrdunk.com/en/trading-cards/${c.id}" target="_blank" style="color:#818cf8;text-decoration:none">${escapeHtml(c.card_name||'')}</a>
+        </div>
+      </td>
+      <td>${escapeHtml(c.brand||'')}</td>
+      <td><strong>$${c.min_price ?? '?'}</strong></td>
+      <td>${c.used_min_price_format || '-'}</td>
+      <td>${c.listing_count ?? '0'}</td>
+      <td class="text-muted">${c.release_date ? c.release_date.slice(0,10) : '-'}</td>
+    </tr>
+  `).join('');
+}
+
+// ============================================================
+//  统计
+// ============================================================
+async function loadStats() {
+  try {
+    const res = await fetch('/api/stats');
+    const data = await res.json();
+    if (data.error) return;
+
+    const grid = document.getElementById('statsGrid');
+    grid.innerHTML = `
+      <div class="stat-card"><div class="num">${data.total_cards}</div><div class="label">卡片总数</div></div>
+      <div class="stat-card"><div class="num">$${data.price_range?.avg ?? '-'}</div><div class="label">平均价格</div></div>
+      <div class="stat-card"><div class="num">$${data.price_range?.min ?? '-'}</div><div class="label">最低价</div></div>
+      <div class="stat-card"><div class="num">$${data.price_range?.max ?? '-'}</div><div class="label">最高价</div></div>
+    `;
+
+    // Brand distribution
+    const brandEl = document.getElementById('brandChart');
+    const brands = data.brands || {};
+    brandEl.innerHTML = Object.entries(brands).slice(0, 10).map(([name, count]) => `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        <span style="min-width:150px;font-size:13px">${escapeHtml(name)}</span>
+        <div style="flex:1;background:var(--bg-input);border-radius:4px;height:20px;overflow:hidden">
+          <div style="height:100%;background:var(--primary);border-radius:4px;width:${Math.min(count / Math.max(...Object.values(brands)) * 100, 100)}%;display:flex;align-items:center;padding-left:8px;font-size:11px;color:#fff">${count}</div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+
+// ============================================================
+//  工具
+// ============================================================
+function escapeHtml(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Image viewer
+function showImage(url, title) {
+  const modal = document.getElementById('imageModal');
+  const img = document.getElementById('modalImage');
+  const titleEl = document.getElementById('modalTitle');
+  img.src = url;
+  titleEl.textContent = title || '';
+  modal.classList.add('active');
+}
+function closeImage() {
+  document.getElementById('imageModal').classList.remove('active');
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeImage();
+});
+
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+function updateCrawlBtn() {
+  const checked = document.querySelectorAll('.card-check:checked').length;
+  document.getElementById('crawlBtn').textContent = `爬取选中 (${checked})`;
+}
+
+// 自动加载数据
+loadData();
+loadStats();
+</script>
+</body>
+</html>
