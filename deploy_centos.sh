@@ -7,7 +7,7 @@ set -e
 #  用法: sudo bash deploy_centos.sh
 # ============================================================
 
-APP_DIR="/opt/snkrdunk"
+APP_DIR="/www/Python/snkrdunk"
 DOMAIN="${1:-}"  # 可选参数: 域名
 
 RED='\033[0;31m'
@@ -90,11 +90,11 @@ python3 -m venv venv
 source venv/bin/activate
 
 log "  安装 Python 依赖..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
-pip install gunicorn -q
 
-log "  依赖安装完成"
+# ⚠️ CentOS 7 OpenSSL 兼容说明
+# 本项目已全面使用内置 urllib，无需安装 requests 即可运行 Web UI
+# 如仍需使用 CLI 工具的 requests 特性，可安装兼容版本：
+pip install flask gunicorn beautifulsoup4 lxml -q
 
 # ============================================================
 #  5. 创建 systemd 服务
@@ -110,10 +110,9 @@ After=network.target
 Type=simple
 User=nginx
 Group=nginx
-WorkingDirectory=/opt/snkrdunk
-Environment="PATH=/opt/snkrdunk/venv/bin"
-Environment="PYTHONUNBUFFERED=1"
-ExecStart=/opt/snkrdunk/venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 300 app:app
+WorkingDirectory=/www/Python/snkrdunk
+Environment="PATH=/www/Python/snkrdunk/venv/bin"
+ExecStart=/www/Python/snkrdunk/venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 300 app:app
 Restart=always
 RestartSec=5
 
@@ -165,7 +164,7 @@ server {
 
     # 静态文件缓存
     location /static/ {
-        alias /opt/snkrdunk/static/;
+        alias /www/Python/snkrdunk/static/;
         expires 7d;
         add_header Cache-Control "public, immutable";
     }

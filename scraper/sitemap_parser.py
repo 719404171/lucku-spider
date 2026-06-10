@@ -6,47 +6,59 @@ import gzip
 import io
 import json
 import re
+import ssl
 import time
+import urllib.error
+import urllib.request
 from typing import List, Optional
 from urllib.parse import urljoin
 
-import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://snkrdunk.com"
 SITEMAP_INDEX_URL = "https://snkrdunk.com/en/sitemap/sitemap-index-en-product-trading-card-single.xml"
 
+# 兼容旧版 OpenSSL 的 SSL 上下文（CentOS 7 OpenSSL 1.0.2）
+_SSL_CTX = ssl.create_default_context()
+try:
+    _SSL_CTX.check_hostname = False
+    _SSL_CTX.verify_mode = ssl.CERT_NONE
+except Exception:
+    pass
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
 
 def fetch_with_gzip(url: str) -> Optional[str]:
     """
     获取 URL 内容，自动处理 gzip 解压。
-    某些 sitemap 使用 Content-Type: application/x-gzip，需要手动解压。
+    使用 urllib（兼容旧版 OpenSSL）。
     """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-    }
     try:
-        resp = requests.get(url, headers=headers, timeout=60)
-        resp.raise_for_status()
-
-        content_type = resp.headers.get("Content-Type", "")
-        # 如果是 gzip 格式，手动解压
-        if "gzip" in content_type or url.endswith(".gz"):
-            try:
-                decompressed = gzip.decompress(resp.content)
-                return decompressed.decode("utf-8")
-            except Exception:
-                # 如果解压失败，尝试直接使用 text
-                return resp.text
-        else:
-            return resp.text
-    except requests.RequestException as e:
+        req = urllib.request.Request(url, headers=_HEADERS)
+        with urllib.request.urlopen(req, context=_SSL_CTX, timeout=60) as resp:
+            content = resp.read()
+            content_type = resp.headers.get("Content-Type", "")
+    except urllib.error.URLError as e:
         print(f"[ERROR] Failed to fetch {url}: {e}")
         return None
+
+    # 如果是 gzip 格式，手动解压
+    if "gzip" in content_type or url.endswith(".gz"):
+        try:
+            decompressed = gzip.decompress(content)
+            return decompressed.decode("utf-8")
+        except Exception:
+            # 如果解压失败，尝试直接用原始内容
+            return content.decode("utf-8", errors="replace")
+    else:
+        return content.decode("utf-8", errors="replace")
 
 
 def parse_sitemap_index(xml_content: str) -> List[str]:

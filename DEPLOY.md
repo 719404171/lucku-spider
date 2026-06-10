@@ -8,13 +8,13 @@
 
 ```bash
 # 1. 上传项目到服务器（在本地 Windows 执行）
-scp -r D:\AiProject\SpiderCard root@your-server:/opt/
+scp -r D:\AiProject\SpiderCard root@your-server:/www/Python/
 
 # 2. SSH 登录服务器
 ssh root@your-server
 
 # 3. 运行部署脚本
-cd /opt/SpiderCard
+cd /www/Python/SpiderCard
 chmod +x deploy_centos.sh
 sudo bash deploy_centos.sh
 ```
@@ -56,7 +56,7 @@ sudo systemctl restart nginx
 ### 更新代码
 
 ```bash
-cd /opt/snkrdunk
+cd /www/Python/snkrdunk
 # 上传新代码覆盖（或用 git pull）
 sudo cp -r /path/to/new/files/* .
 sudo chown -R nginx:nginx .
@@ -169,7 +169,7 @@ sudo certbot --nginx -d your-domain.com
 
 #### 1. 上传项目
 
-宝塔面板 → 文件 → 进入 `/www/wwwroot/` → 新建目录 `snkrdunk` → 上传项目文件
+宝塔面板 → **文件** → 进入 `/www/wwwroot/` → 新建目录 `snkrdunk` → 上传项目文件
 
 或使用 Git：
 
@@ -180,44 +180,47 @@ git clone https://github.com/your/repo.git snkrdunk
 
 #### 2. 安装 Python 依赖
 
-宝塔面板 → 终端 → 执行：
+宝塔面板 → **终端** → 执行：
 
 ```bash
-cd /www/wwwroot/snkrdunk
+cd /www/Python/snkrdunk
+
+# 创建虚拟环境
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-pip install gunicorn
+
+# ⚠️ CentOS 7 OpenSSL 兼容说明
+# 本项目已全面使用内置 urllib，无需安装 requests 即可运行 Web UI
+# 如仍需使用 CLI 工具的 requests 特性，可安装兼容版本：
+#   pip install "urllib3<2" "requests<2.29"
+
+# 安装其他依赖
+pip install flask gunicorn beautifulsoup4 lxml
 ```
 
 #### 3. 方法一：使用宝塔 Python 项目管理器（推荐）
 
-> **常见错误**: 如果添加项目时报 `Error: '' is not a valid port number`，原因是 **监听端口** 字段留空了，必须先填入端口号再选择框架。
+> ⚠️ **常见错误**: `Error: '' is not a valid port number` → 原因是**先选框架后端口被清空**。必须先填端口再选框架。
 
-1. 宝塔面板 → 软件商店 → **Python 项目管理器** → 设置
+1. 宝塔面板 → **软件商店** → **Python 项目管理器** → **设置**
 2. 点击 **添加 Python 项目**
-3. 按以下顺序填写（**先填端口，再选框架**）：
+3. 按以下顺序填写：
    - **项目名称**: `snkrdunk`
-   - **监听端口**: **先填** `5000`（← 必须先填，否则报错）
+   - **监听端口**: **先填** `5000`
    - **框架**: 选 `Flask`
    - **启动方式**: 选 `gunicorn`
-   - **项目目录**: `/www/wwwroot/snkrdunk`
-   - **启动文件**: `/www/wwwroot/snkrdunk/app.py`
-   - **Python 版本**: 选 3.10+
+   - **项目目录**: `/www/Python/snkrdunk`
+   - **启动文件**: `/www/Python/snkrdunk/app.py`
+   - **Python 版本**: 选 3.9+
    - **命令行**: 留空
-4. 点击确定，等待启动完成
+4. 点击确定，等待启动
 
-> **如果 still 报错端口无效**：可以换一种方式——使用 **命令行模式** 启动：
-> 1. Python 项目管理器 → 添加 Python 项目
-> 2. **项目名称**: `snkrdunk`
-> 3. **路径**: `/www/wwwroot/snkrdunk`
-> 4. **Python 版本**: 3.10+
-> 5. **启动方式**: 选 **命令行**
-> 6. **命令行**: 填入以下完整命令：
+> **备用 - 命令行模式**（端口报错时用）：
+> 1. 添加项目 → 启动方式选 **命令行**
+> 2. **命令行**填入：
 >    ```
->    /www/wwwroot/snkrdunk/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 --timeout 300 app:app
+>    /www/Python/snkrdunk/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 --timeout 300 app:app
 >    ```
-> 7. 点击确定
 
 #### 4. 方法二：手动配置 systemd 服务
 
@@ -233,9 +236,9 @@ After=network.target
 Type=simple
 User=www
 Group=www
-WorkingDirectory=/www/wwwroot/snkrdunk
-Environment="PATH=/www/wwwroot/snkrdunk/venv/bin"
-ExecStart=/www/wwwroot/snkrdunk/venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 300 app:app
+WorkingDirectory=/www/Python/snkrdunk
+Environment="PATH=/www/Python/snkrdunk/venv/bin"
+ExecStart=/www/Python/snkrdunk/venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 300 app:app
 Restart=always
 RestartSec=5
 
@@ -253,7 +256,7 @@ systemctl start snkrdunk
 宝塔面板 → 网站 → 添加站点：
 
 - **域名**: 输入你的域名或服务器 IP（如 `192.168.1.100`）
-- **根目录**: `/www/wwwroot/snkrdunk`
+- **根目录**: `/www/Python/snkrdunk`
 - **PHP 版本**: 纯静态
 
 添加完成后，点击 **设置** → **反向代理** → **添加反向代理**：
@@ -305,10 +308,10 @@ location / {
 
 ### 注意事项
 
-1. **权限问题**: 确保 `/www/wwwroot/snkrdunk/data` 目录有写入权限：
+1. **权限问题**: 确保 `/www/Python/snkrdunk/data` 目录有写入权限：
    ```bash
-   chmod 755 /www/wwwroot/snkrdunk/data
-   chown -R www:www /www/wwwroot/snkrdunk
+   chmod 755 /www/Python/snkrdunk/data
+   chown -R www:www /www/Python/snkrdunk
    ```
 
 2. **Python 版本**: 宝塔 Python 项目管理器默认可能使用 Python 3.6，建议在软件商店安装 Python 3.10+ 再创建项目
@@ -466,7 +469,7 @@ nssm start SNKRDUNK
 set -e
 
 # 配置
-APP_DIR="/opt/snkrdunk"
+APP_DIR="/www/Python/snkrdunk"
 DOMAIN="your-domain.com"
 
 echo "=== 部署 SNKRDUNK 交易卡爬虫 ==="
@@ -497,9 +500,9 @@ After=network.target
 
 [Service]
 User=www-data
-WorkingDirectory=/opt/snkrdunk
-Environment="PATH=/opt/snkrdunk/venv/bin"
-ExecStart=/opt/snkrdunk/venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 app:app
+WorkingDirectory=/www/Python/snkrdunk
+Environment="PATH=/www/Python/snkrdunk/venv/bin"
+ExecStart=/www/Python/snkrdunk/venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 app:app
 Restart=always
 
 [Install]
@@ -568,7 +571,7 @@ deny all;
 
 4. **定期更新**：
 ```bash
-cd /opt/snkrdunk
+cd /www/Python/snkrdunk
 git pull
 source venv/bin/activate
 pip install -r requirements.txt

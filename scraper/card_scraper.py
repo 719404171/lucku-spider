@@ -8,11 +8,32 @@ import html
 import json
 import os
 import re
+import ssl
 import time
+import urllib.error
+import urllib.request
 from typing import Any, Dict, List, Optional
 
-import requests
 from bs4 import BeautifulSoup
+
+
+# 兼容旧版 OpenSSL 的 SSL 上下文（CentOS 7 OpenSSL 1.0.2）
+_SSL_CTX = ssl.create_default_context()
+try:
+    _SSL_CTX.check_hostname = False
+    _SSL_CTX.verify_mode = ssl.CERT_NONE
+except Exception:
+    pass
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
 
 
 class CardScraper:
@@ -26,24 +47,15 @@ class CardScraper:
         """
         self.delay = delay
         self.output_dir = output_dir
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-        })
+        self.headers = _HEADERS.copy()
 
     def fetch_page(self, url: str) -> Optional[str]:
-        """获取页面 HTML"""
+        """获取页面 HTML（使用 urllib，兼容旧版 OpenSSL）"""
         try:
-            resp = self.session.get(url, timeout=30)
-            resp.raise_for_status()
-            return resp.text
-        except requests.RequestException as e:
+            req = urllib.request.Request(url, headers=self.headers)
+            with urllib.request.urlopen(req, context=_SSL_CTX, timeout=30) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.URLError as e:
             print(f"[ERROR] Failed to fetch {url}: {e}")
             return None
 
@@ -464,15 +476,15 @@ class CardScraper:
         比 scrape_card 快得多，适合关键词过滤
         """
         try:
-            resp = self.session.get(url, timeout=30)
-            resp.raise_for_status()
-            # 从 HTML 中提取 <title> 标签（不用 BeautifulSoup，更快）
-            match = re.search(rb'<title[^>]*>(.*?)</title>', resp.content, re.IGNORECASE | re.DOTALL)
+            req = urllib.request.Request(url, headers=self.headers)
+            with urllib.request.urlopen(req, context=_SSL_CTX, timeout=30) as resp:
+                content = resp.read()
+            match = re.search(rb'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
             if match:
                 raw = match.group(1).decode('utf-8', errors='replace')
                 return raw.replace(' | SNKRDUNK', '').strip()
             return None
-        except requests.RequestException:
+        except urllib.error.URLError:
             return None
 
     def search_cards(
