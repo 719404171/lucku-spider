@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 - SNKRDUNK 交易卡爬虫</title>
+<style>
+  :root {
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --bg: #0f172a;
+    --bg-card: #1e293b;
+    --bg-input: #334155;
+    --text: #f1f5f9;
+    --text-muted: #94a3b8;
+    --border: #334155;
+    --danger: #ef4444;
+    --radius: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .login-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 40px;
+    width: 380px;
+    max-width: 90vw;
+  }
+  .login-wrap h1 {
+    font-size: 22px;
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .login-wrap p {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: 28px;
+  }
+  .form-group {
+    margin-bottom: 18px;
+  }
+  .form-group label {
+    display: block;
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .form-group input {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .form-group input:focus {
+    border-color: var(--primary);
+  }
+  .login-btn {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: var(--radius);
+    background: var(--primary);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .2s;
+  }
+  .login-btn:hover {
+    background: var(--primary-hover);
+  }
+  .error-msg {
+    background: rgba(239,68,68,.15);
+    color: var(--danger);
+    font-size: 13px;
+    text-align: center;
+    padding: 10px;
+    border-radius: var(--radius);
+    margin-bottom: 18px;
+  }
+  .footer {
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 20px;
+  }
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <h1>SNKRDUNK 爬虫</h1>
+  <p>请输入账号密码登录</p>
+
+  {% if error %}
+  <div class="error-msg">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="/login">
+    <div class="form-group">
+      <label for="username">账号</label>
+      <input type="text" id="username" name="username" placeholder="请输入账号" required autofocus>
+    </div>
+    <div class="form-group">
+      <label for="password">密码</label>
+      <input type="password" id="password" name="password" placeholder="请输入密码" required>
+    </div>
+    <button type="submit" class="login-btn">登 录</button>
+  </form>
+  <div class="footer">默认账号 admin / 密码 admin</div>
+</div>
+</body>
+</html>

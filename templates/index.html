@@ -143,8 +143,13 @@ body {
 <body>
 
 <div class="header">
-  <h1>SNKRDUNK 交易卡爬虫</h1>
-  <p>搜索、浏览、爬取 SNKRDUNK 交易卡数据</p>
+  <div style="max-width:1200px;margin:0 auto;padding:0 20px;display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <h1>SNKRDUNK 交易卡爬虫</h1>
+      <p>搜索、浏览、爬取 SNKRDUNK 交易卡数据</p>
+    </div>
+    <a href="/logout" style="color:rgba(255,255,255,.8);text-decoration:none;font-size:14px;padding:8px 16px;border:1px solid rgba(255,255,255,.3);border-radius:6px;transition:all .2s" onmouseover="this.style.background='rgba(255,255,255,.1)'" onmouseout="this.style.background='transparent'">退出登录</a>
+  </div>
 </div>
 
 <div class="container">
@@ -204,6 +209,7 @@ body {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
         <input class="filter-input" type="text" id="dataFilter" placeholder="过滤名称..." oninput="filterData()" style="flex:1;margin-bottom:0;min-width:200px">
         <button class="btn btn-danger btn-sm" id="batchDelBtn" onclick="batchDelete()" style="display:none">删除选中</button>
+        <button class="btn btn-primary btn-sm" id="importBtn" onclick="importToMySQL()" style="display:none">导入 MySQL</button>
       </div>
       <div class="table-wrap"><table><thead>
         <tr><th style="width:32px"><input type="checkbox" id="dataSelectAll" onchange="toggleDataAll()"></th><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>二手最低价</th><th>Listing</th><th>操作</th></tr>
@@ -440,8 +446,11 @@ function filterData() {
 function updateBatchDelBtn() {
   const checked = document.querySelectorAll('.data-check:checked').length;
   const btn = document.getElementById('batchDelBtn');
+  const importBtn = document.getElementById('importBtn');
   btn.style.display = checked ? 'inline-flex' : 'none';
   btn.textContent = `删除选中 (${checked})`;
+  importBtn.style.display = checked ? 'inline-flex' : 'none';
+  importBtn.textContent = `导入 MySQL (${checked})`;
 }
 
 function toggleDataAll() {
@@ -476,6 +485,38 @@ async function _doDelete(ids) {
     loadStats();
   } catch(e) {
     toast('删除失败: ' + e.message, 'error');
+  }
+}
+
+// ============================================================
+//  导入 MySQL
+// ============================================================
+async function importToMySQL() {
+  const ids = Array.from(document.querySelectorAll('.data-check:checked')).map(cb => cb.value);
+  if (!ids.length) return toast('请先选择要导入的卡片', 'error');
+  if (!confirm(`确定要导入选中的 ${ids.length} 张卡片到 MySQL 吗？`)) return;
+
+  const btn = document.getElementById('importBtn');
+  btn.disabled = true;
+  btn.textContent = '导入中...';
+
+  try {
+    const res = await fetch('/api/data/import-mysql', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({card_ids: ids}),
+    });
+    const data = await res.json();
+    if (data.error) return toast(data.error, 'error');
+    toast(data.message, 'success');
+    // 刷新数据列表和统计
+    loadData();
+    loadStats();
+  } catch(e) {
+    toast('导入失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = `导入 MySQL (${ids.length})`;
   }
 }
 

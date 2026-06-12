@@ -2,6 +2,7 @@
 SNKRDUNK Trading Card Web UI - Flask 后端
 提供搜索、爬取、数据展示的 Web 界面
 """
+import functools
 import json
 import os
 import sys
@@ -10,7 +11,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,8 +19,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scraper.search_api import search_trading_cards, print_search_results
 from scraper.card_scraper import CardScraper
 from scraper.sitemap_parser import discover_all_card_urls
+from scraper.database import import_cards, ensure_table
 
 app = Flask(__name__)
+app.secret_key = "snkrdunk-secret-key-change-in-production"
+
+# 默认登录账号 / 密码
+AUTH_USER = "admin"
+AUTH_PASS = "admin"
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -29,10 +36,63 @@ crawl_status = {"running": False, "progress": "", "total": 0, "done": 0, "match"
 
 
 # ============================================================
+#  登录校验装饰器
+# ============================================================
+
+def login_required(view):
+    """需要登录才能访问的装饰器"""
+    @functools.wraps(view)
+    def wrapped_view(**kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login_page"))
+        return view(**kwargs)
+    return wrapped_view
+
+
+def api_login_required(view):
+    """API 登录校验装饰器（返回 401 json）"""
+    @functools.wraps(view)
+    def wrapped_view(**kwargs):
+        if not session.get("logged_in"):
+            return jsonify({"error": "未登录，请先登录"}), 401
+        return view(**kwargs)
+    return wrapped_view
+
+
+# ============================================================
+#  登录 / 登出
+# ============================================================
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    """登录页面 + 登录提交"""
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        if username == AUTH_USER and password == AUTH_PASS:
+            session["logged_in"] = True
+            session["username"] = username
+            return redirect(url_for("index"))
+        return render_template("login.html", error="账号或密码错误"), 401
+
+    # 已经登录则直接跳转首页
+    if session.get("logged_in"):
+        return redirect(url_for("index"))
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login_page"))
+
+
+# ============================================================
 #  页面路由
 # ============================================================
 
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
@@ -42,6 +102,7 @@ def index():
 # ============================================================
 
 @app.route("/api/search")
+@api_login_required
 def api_search():
     """搜索交易卡"""
     keyword = request.args.get("keyword", "").strip()
@@ -63,6 +124,7 @@ def api_search():
 
 
 @app.route("/api/data")
+@api_login_required
 def api_data():
     """获取已保存的卡片数据"""
     data_file = os.path.join(DATA_DIR, "trading_cards.json")
@@ -82,6 +144,7 @@ def api_data():
 
 
 @app.route("/api/data/delete", methods=["POST"])
+@api_login_required
 def api_data_delete():
     """删除指定卡片数据"""
     data = request.get_json()
@@ -116,7 +179,84 @@ def api_data_delete():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/data/import-mysql", methods=["POST"])
+@api_login_required
+def api_import_mysql():
+    """将选中的卡片数据导入 MySQL 数据库"""
+    data = request.get_json()
+    card_ids = data.get("card_ids", [])
+
+    if not card_ids:
+        return jsonify({"error": "请选择要导入的卡片"}), 400
+
+    data_file = os.path.join(DATA_DIR, "trading_cards.json")
+    if not os.path.exists(data_file):
+        return jsonify({"error": "暂无数据可导入"}), 400
+
+    try:
+        with open(data_file, "r", encoding="utf-8") as f:
+            all_cards = json.load(f)
+
+        # 按 ID 过滤出用户选中的卡片
+        id_set = set(card_ids)
+        selected = [c for c in all_cards if c.get("id") in id_set]
+
+        if not selected:
+            return jsonify({"error": "未找到匹配的卡片数据"}), 400
+
+        # 确保表存在
+        ensure_table()
+
+        # 分批导入（每批 50 张，避免连接超时）
+        all_success_ids = []
+        all_error_details = []
+
+        batch_size = 50
+        for i in range(0, len(selected), batch_size):
+            batch = selected[i:i + batch_size]
+            result = import_cards(batch)
+            all_success_ids.extend(result["success_ids"])
+            all_error_details.extend(result["errors"])
+
+        # 从本地 JSON 删除已成功导入的数据
+        if all_success_ids:
+            success_set = set(all_success_ids)
+            before = len(all_cards)
+            all_cards = [c for c in all_cards if c.get("id") not in success_set]
+            deleted = before - len(all_cards)
+            print(f"[DEBUG] import-mysql: success_ids={all_success_ids}, before={before}, after={len(all_cards)}, deleted={deleted}")
+            with open(data_file, "w", encoding="utf-8") as f:
+                json.dump(all_cards, f, ensure_ascii=False, indent=2)
+
+        total_imported = len(all_success_ids)
+        total_errors = len(all_error_details)
+
+        # 全部失败时返回错误，不清除数据
+        if total_imported == 0 and total_errors > 0:
+            first_errors = all_error_details[:3]
+            return jsonify({
+                "error": f"导入全部失败（{total_errors} 张），请检查数据格式。示例错误: {first_errors}"
+            }), 500
+
+        return jsonify({
+            "success": True,
+            "total": len(selected),
+            "imported": total_imported,
+            "failed": total_errors,
+            "errors": all_error_details[:20],
+            "message": f"导入完成: 成功 {total_imported} 张（已从本地删除）" +
+                       (f"，失败 {total_errors} 张" if total_errors else ""),
+        })
+    except Exception as e:
+        err_msg = str(e)
+        # 区分 MySQL 连接错误和其他错误
+        if "Can't connect" in err_msg or "Connection refused" in err_msg or "Timeout" in err_msg:
+            return jsonify({"error": f"无法连接 MySQL 服务器 (8.210.90.110:3306)，请检查网络和防火墙。错误: {e}"}), 500
+        return jsonify({"error": f"导入失败: {e}"}), 500
+
+
 @app.route("/api/search-results")
+@api_login_required
 def api_search_results():
     """获取最后一次搜索结果"""
     data_file = os.path.join(DATA_DIR, "search_results.json")
@@ -136,6 +276,7 @@ def api_search_results():
 
 
 @app.route("/api/crawl", methods=["POST"])
+@api_login_required
 def api_crawl():
     """爬取指定卡片的详细数据（异步）"""
     if crawl_status["running"]:
@@ -159,12 +300,14 @@ def api_crawl():
 
 
 @app.route("/api/crawl/status")
+@api_login_required
 def api_crawl_status():
     """获取爬取状态"""
     return jsonify(crawl_status)
 
 
 @app.route("/api/stats")
+@api_login_required
 def api_stats():
     """获取数据统计"""
     data_file = os.path.join(DATA_DIR, "trading_cards.json")
