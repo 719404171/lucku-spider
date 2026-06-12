@@ -19,7 +19,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scraper.search_api import search_trading_cards, print_search_results
 from scraper.card_scraper import CardScraper
 from scraper.sitemap_parser import discover_all_card_urls
-from scraper.database import import_cards, ensure_table
+
+# MySQL 导入功能（可选依赖）
+try:
+    from scraper.database import import_cards, ensure_table
+    HAS_MYSQL = True
+except ImportError:
+    import_cards = ensure_table = None
+    HAS_MYSQL = False
+    print("[WARN] pymysql 未安装，MySQL 导入功能不可用。pip install pymysql")
 
 app = Flask(__name__)
 app.secret_key = "snkrdunk-secret-key-change-in-production"
@@ -203,6 +211,9 @@ def api_import_mysql():
 
         if not selected:
             return jsonify({"error": "未找到匹配的卡片数据"}), 400
+
+        if not HAS_MYSQL:
+            return jsonify({"error": "服务器未安装 pymysql，请执行: pip install pymysql"}), 500
 
         # 确保表存在
         ensure_table()
