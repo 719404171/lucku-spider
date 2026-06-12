@@ -103,6 +103,8 @@ body {
   th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
   th { background: var(--bg-input); color: var(--text-muted); font-weight: 600; position: sticky; top: 0; }
   tr:hover td { background: rgba(99,102,241,.08); }
+  .cond-row td { padding: 6px 12px 10px 44px; background: var(--bg-input); border-bottom: 1px solid var(--border); }
+  .cond-row:hover td { background: var(--bg-input); }
   .text-muted { color: var(--text-muted); }
   .text-right { text-align: right; }
 
@@ -197,7 +199,7 @@ body {
         </div>
       </div>
       <div class="table-wrap"><table><thead>
-        <tr><th style="width:32px"></th><th>ID</th><th style="min-width:280px">名称</th><th>最低价</th><th>Listing</th></tr>
+        <tr><th style="width:32px"></th><th>ID</th><th style="min-width:280px">名称</th><th>最低价</th></tr>
       </thead><tbody id="searchTableBody"></tbody></table></div>
     </div>
   </div>
@@ -212,7 +214,7 @@ body {
         <button class="btn btn-primary btn-sm" id="importBtn" onclick="importToMySQL()" style="display:none">导入 MySQL</button>
       </div>
       <div class="table-wrap"><table><thead>
-        <tr><th style="width:32px"><input type="checkbox" id="dataSelectAll" onchange="toggleDataAll()"></th><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>二手最低价</th><th>Listing</th><th>操作</th></tr>
+        <tr><th style="width:32px"><input type="checkbox" id="dataSelectAll" onchange="toggleDataAll()"></th><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>操作</th></tr>
       </thead><tbody id="dataTableBody"></tbody></table></div>
       <div class="empty" id="dataEmpty">暂无数据，请先搜索并爬取卡片</div>
     </div>
@@ -231,7 +233,11 @@ body {
 <!-- Tab: Stats -->
 <div class="tab-content" id="tab-stats" style="display:none">
   <div class="stats-grid" id="statsGrid"></div>
-  <div class="card"><h2>品牌分布</h2><div id="brandChart"></div></div>
+  <div class="card">
+    <h2>📋 导入详情</h2>
+    <div id="statsImported" style="margin-top:8px"></div>
+    <div id="statsNotImported" style="margin-top:8px"></div>
+  </div>
 </div>
 
 </div> <!-- end container -->
@@ -291,9 +297,9 @@ function renderSearchResults(results) {
   el.style.display = 'block';
   count.textContent = `共 ${results.length} 张卡片`;
 
-  tbody.innerHTML = results.map(r => `
-    <tr>
-      <td><input type="checkbox" class="card-check" value="${r.id}"></td>
+  tbody.innerHTML = results.map((r, idx) => `
+    <tr data-idx="${idx}" class="card-main-row">
+      <td><input type="checkbox" class="card-check" value="${r.id}" onchange="updateCrawlBtn()"></td>
       <td class="text-muted">${r.id}</td>
       <td>
         <div style="display:flex;align-items:center;gap:10px">
@@ -306,21 +312,83 @@ function renderSearchResults(results) {
         </div>
       </td>
       <td><strong>$${r.min_price ?? '?'}</strong></td>
-      <td>${r.listing_count ?? '0'}</td>
+    </tr>
+    <tr class="cond-row" data-card="${r.id}">
+      <td colspan="4">
+        <div class="cond-prices" id="cond-${r.id}" style="font-size:12px;line-height:1.8;">
+          <span style="color:var(--text-muted)">加载中...</span>
+        </div>
+      </td>
     </tr>
   `).join('');
 
   document.getElementById('selectAll').checked = false;
-  document.getElementById('crawlBtn').textContent = `爬取选中 (${results.length})`;
+  updateCrawlBtn();
+
+  // 自动加载所有卡片的成色价格
+  results.forEach(r => loadConditionPrices(r.id));
 }
 
 // ============================================================
-//  全选
+//  自动加载所有卡片的成色价格
 // ============================================================
-function toggleAll() {
-  const checked = document.getElementById('selectAll').checked;
-  document.querySelectorAll('.card-check').forEach(cb => cb.checked = checked);
-  updateCrawlBtn();
+const condCache = {};  // card_id -> condition data
+
+async function loadConditionPrices(cardId) {
+  if (condCache[cardId]) {
+    renderConditionCheckboxes(cardId, condCache[cardId]);
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/conditions/${cardId}`, { timeout: 30000 });
+    const data = await res.json();
+    if (data.error) {
+      document.getElementById(`cond-${cardId}`).innerHTML = `<span style="color:#ef4444">获取失败</span>`;
+      return;
+    }
+    condCache[cardId] = data.conditions || {};
+    renderConditionCheckboxes(cardId, condCache[cardId]);
+  } catch(e) {
+    document.getElementById(`cond-${cardId}`).innerHTML = `<span style="color:#ef4444">超时</span>`;
+  }
+}
+
+function renderConditionCheckboxes(cardId, conditions) {
+  const container = document.getElementById(`cond-${cardId}`);
+  if (!container) return;
+
+  const grades = ['A','B','C','D','PSA 10','PSA 9','PSA 8 or under','BGS 10 BL','BGS 10 GL'];
+
+  // 初始化 selectedGrade（已选成色）
+  if (!window._condSelections) window._condSelections = {};
+  if (!window._condSelections[cardId]) window._condSelections[cardId] = null;
+
+  const selected = window._condSelections[cardId];
+
+  const html = grades.map(g => {
+    const c = conditions[g] || {};
+    const price = c.price != null ? `$${c.price.toFixed(2)}` : '$0';
+    const isChecked = selected === g;
+
+    return `<label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;margin-right:8px;padding:2px 6px;border-radius:4px;${isChecked ? 'background:var(--primary);color:#fff' : 'background:var(--bg-input);color:var(--text)'}">
+      <input type="radio" name="cond-${cardId}" value="${g}"
+             ${isChecked ? 'checked' : ''}
+             onchange="selectCondition('${cardId}', '${g}')"
+             style="margin:0">
+      <span style="font-weight:${isChecked?'600':'400'}">${g}</span>
+      <span style="opacity:0.7">${price}</span>
+    </label>`;
+  }).join('');
+
+  container.innerHTML = html;
+}
+
+function selectCondition(cardId, grade) {
+  if (!window._condSelections) window._condSelections = {};
+  window._condSelections[cardId] = grade;
+  // 重新渲染所有 label 样式
+  renderConditionCheckboxes(cardId, condCache[cardId] || {});
 }
 
 // ============================================================
@@ -329,6 +397,17 @@ function toggleAll() {
 async function crawlSelected() {
   const ids = Array.from(document.querySelectorAll('.card-check:checked')).map(cb => cb.value);
   if (!ids.length) return toast('请先选择要爬取的卡片', 'error');
+
+  // 收集全部成色价格 + 选中的成色
+  const conditions = {};
+  ids.forEach(cid => {
+    if (condCache[cid]) {
+      conditions[cid] = {
+        all_prices: condCache[cid],  // 所有成色价格
+        selected: window._condSelections && window._condSelections[cid] || null,  // 选中的等级
+      };
+    }
+  });
 
   const btn = document.getElementById('crawlBtn');
   btn.disabled = true; btn.textContent = '爬取中...';
@@ -340,7 +419,7 @@ async function crawlSelected() {
     const res = await fetch('/api/crawl', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({card_ids: ids}),
+      body: JSON.stringify({card_ids: ids, conditions: conditions}),
     });
     const data = await res.json();
     if (data.error) { toast(data.error, 'error'); return; }
@@ -432,8 +511,6 @@ function filterData() {
       </td>
       <td>${escapeHtml(c.brand||'')}</td>
       <td><strong>$${c.min_price ?? '?'}</strong></td>
-      <td>${c.used_min_price_format || '-'}</td>
-      <td>${c.listing_count ?? '0'}</td>
       <td><button class="btn btn-danger btn-sm" onclick="deleteCard('${c.id}')" style="padding:4px 8px;font-size:11px">删除</button></td>
     </tr>
   `).join('');
@@ -508,7 +585,20 @@ async function importToMySQL() {
     });
     const data = await res.json();
     if (data.error) return toast(data.error, 'error');
-    toast(data.message, 'success');
+
+    // 诊断信息
+    let diag = '';
+    if (data.table_columns && data.table_columns.length) {
+      diag += `\n表字段: ${data.table_columns.join(', ')}`;
+    }
+    if (data.insert_columns && data.insert_columns.length) {
+      diag += `\n实际插入字段: ${data.insert_columns.join(', ')}`;
+    }
+    if (data.verify_error) {
+      diag += `\n验证错误: ${data.verify_error}`;
+    }
+
+    toast(data.message + diag, 'success');
     // 刷新数据列表和统计
     loadData();
     loadStats();
@@ -531,23 +621,51 @@ async function loadStats() {
 
     const grid = document.getElementById('statsGrid');
     grid.innerHTML = `
-      <div class="stat-card"><div class="num">${data.total_cards}</div><div class="label">卡片总数</div></div>
-      <div class="stat-card"><div class="num">$${data.price_range?.avg ?? '-'}</div><div class="label">平均价格</div></div>
-      <div class="stat-card"><div class="num">$${data.price_range?.min ?? '-'}</div><div class="label">最低价</div></div>
-      <div class="stat-card"><div class="num">$${data.price_range?.max ?? '-'}</div><div class="label">最高价</div></div>
+      <div class="stat-card"><div class="num">${data.total_cards}</div><div class="label">本地卡片总数</div></div>
+      <div class="stat-card"><div class="num" style="color:#22c55e">${data.imported_count}</div><div class="label">已导入 MySQL</div></div>
+      <div class="stat-card"><div class="num" style="color:#f59e0b">${data.not_imported_count}</div><div class="label">未导入 MySQL</div></div>
+      <div class="stat-card"><div class="num" style="font-size:14px">${data.mysql_connected ? '✅ 已连接' : '❌ 未连接'}</div><div class="label">MySQL 状态</div></div>
     `;
 
-    // Brand distribution
-    const brandEl = document.getElementById('brandChart');
-    const brands = data.brands || {};
-    brandEl.innerHTML = Object.entries(brands).slice(0, 10).map(([name, count]) => `
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-        <span style="min-width:150px;font-size:13px">${escapeHtml(name)}</span>
-        <div style="flex:1;background:var(--bg-input);border-radius:4px;height:20px;overflow:hidden">
-          <div style="height:100%;background:var(--primary);border-radius:4px;width:${Math.min(count / Math.max(...Object.values(brands)) * 100, 100)}%;display:flex;align-items:center;padding-left:8px;font-size:11px;color:#fff">${count}</div>
-        </div>
-      </div>
-    `).join('');
+    const imported = data.imported_cards || [];
+    const notImported = data.not_imported_cards || [];
+
+    // 已导入列表（来自数据库）
+    const impEl = document.getElementById('statsImported');
+    if (imported.length) {
+      impEl.innerHTML = `
+        <div style="font-size:14px;font-weight:600;color:#22c55e;margin-bottom:8px">✅ 已导入 MySQL (${imported.length})</div>
+        <div class="table-wrap"><table style="font-size:12px">
+          <thead><tr><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>成交价</th><th>导入时间</th></tr></thead>
+          <tbody>${imported.map(c => `
+            <tr>
+              <td class="text-muted">${escapeHtml(c.id)}</td>
+              <td>${c.card_img ? `<img src="${c.card_img}?size=s" onerror="this.style.display='none'" style="width:24px;height:34px;object-fit:cover;border-radius:2px;vertical-align:middle;margin-right:4px">` : ''}${escapeHtml(c.card_name)}</td>
+              <td>${escapeHtml(c.card_brand||'')}</td>
+              <td>${c.card_cost != null ? '$' + c.card_cost : '-'}</td>
+              <td>${c.deal_price != null ? '$' + c.deal_price.toFixed(2) : '-'}</td>
+              <td class="text-muted" style="font-size:10px">${c.created_at ? c.created_at.slice(0,19).replace('T',' ') : ''}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table></div>`;
+    } else {
+      impEl.innerHTML = '<div style="color:var(--text-muted);padding:8px 0">暂无已导入数据</div>';
+    }
+
+    // 未导入列表
+    const notImpEl = document.getElementById('statsNotImported');
+    if (notImported.length) {
+      notImpEl.innerHTML = `
+        <div style="font-size:14px;font-weight:600;color:#f59e0b;margin-bottom:8px">⬇ 未导入 (${notImported.length})</div>
+        <div class="table-wrap"><table style="font-size:12px">
+          <thead><tr><th>ID</th><th>名称</th><th>最低价</th></tr></thead>
+          <tbody>${notImported.map(c => `
+            <tr><td class="text-muted">${escapeHtml(c.id)}</td><td>${escapeHtml(c.name)}</td><td>${c.price != null ? '$' + c.price : '-'}</td></tr>
+          `).join('')}</tbody>
+        </table></div>`;
+    } else {
+      notImpEl.innerHTML = '<div style="color:var(--text-muted);padding:8px 0">暂无未导入数据</div>';
+    }
   } catch(e) {}
 }
 

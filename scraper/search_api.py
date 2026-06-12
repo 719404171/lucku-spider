@@ -8,6 +8,7 @@ perPage 最大 200, 无分页信息。
 说明：使用内置 urllib 而非 requests，兼容 CentOS 7 旧版 OpenSSL。
 """
 
+import concurrent.futures
 import json
 import os
 import re
@@ -120,3 +121,154 @@ def save_search_results(results: List[Dict], filepath: str):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"  搜索列表已保存: {filepath}")
+
+
+# ============================================================
+#  成色(Condition)价格查询
+# ============================================================
+
+# 成色等级映射：conditionID -> (等级, 名称)
+CONDITION_MAP = {
+    18: ("A", "A"),
+    19: ("B", "B"),
+    20: ("C", "C"),
+    21: ("D", "D"),
+    22: ("PSA 10", "PSA 10"),
+    23: ("PSA 9", "PSA 9"),
+    24: ("PSA 8 or under", "PSA 8 or under"),
+    25: ("BGS 10 BL", "BGS 10 BL"),
+    26: ("BGS 10 GL", "BGS 10 GL"),
+}
+
+CONDITION_IDS = sorted(CONDITION_MAP.keys())  # [18, 19, ..., 26]
+
+USED_LISTINGS_URL = "https://snkrdunk.com/en/v1/products/{product_id}/used-listings"
+
+
+def _get_product_id(card_id: str, card_data: Optional[Dict] = None) -> str:
+    """
+    从卡片 ID 或数据中获取产品的完整 ID（如 SW---418755）。
+    
+    搜索 API 返回的 cardNumber 或 productNumber 已经是完整格式，
+    没有的话就拼接 SW---{card_id}。
+    """
+    if card_data:
+        pn = card_data.get("product_number") or card_data.get("productNumber", "")
+        if pn and pn.startswith("SW"):
+            return pn
+    if card_id and not card_id.startswith("SW"):
+        return f"SW---{card_id}"
+    return card_id
+
+
+def fetch_condition_prices(
+    card_id: str,
+    card_data: Optional[Dict] = None,
+    timeout: int = 10,
+) -> Dict[str, Dict]:
+    """
+    获取卡片所有成色（A~I）的最低价格（并行请求，大幅加快速度）
+
+    Args:
+        card_id: 卡片数字 ID
+        card_data: 卡片数据（可选，含 product_number 时可避免拼接）
+        timeout: 每个请求超时时间
+
+    Returns:
+        { "A": {"price": 123.45, "format": "¥12,345", "count": 3, "error": None}, ... }
+    """
+    product_id = _get_product_id(card_id, card_data)
+    if not product_id or "---" not in str(product_id):
+        product_id = f"SW---{card_id}"
+
+    base_params = "perPage=1&page=1&sortType=latest&isOnlyOnSale=false"
+    urls = []
+    for cid in CONDITION_IDS:
+        grade, _ = CONDITION_MAP[cid]
+        url = f"{USED_LISTINGS_URL.format(product_id=product_id)}?{base_params}&conditionID={cid}"
+        urls.append((cid, grade, url))
+
+    def _fetch_one(cid, grade, url):
+        """抓取单个成色价格"""
+        try:
+            with _urlopen(url, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")[:100]
+            except Exception:
+                pass
+            return grade, {"price": None, "format": "-", "count": 0, "error": f"HTTP {e.code}"}
+        except json.JSONDecodeError as e:
+            return grade, {"price": None, "format": "-", "count": 0, "error": f"JSON: {e}"}
+        except Exception as e:
+            return grade, {"price": None, "format": "-", "count": 0, "error": str(e)[:80]}
+
+        # 解析
+        listings = []
+        if isinstance(data, dict):
+            listings = data.get("listings", data.get("usedListings", data.get("data", [])))
+            if not isinstance(listings, list):
+                listings = []
+            count = data.get("listingCount", data.get("totalCount", len(listings)))
+            if not count:
+                count = len(listings)
+        elif isinstance(data, list):
+            listings = data
+            count = len(listings)
+        else:
+            return grade, {"price": None, "format": "-", "count": 0, "error": "未知格式"}
+
+        min_price = None
+        min_format = ""
+        for item in listings:
+            p = item.get("priceAmount") or item.get("price") or item.get("minPrice")
+            if p is not None:
+                try:
+                    pv = float(p)
+                    if min_price is None or pv < min_price:
+                        min_price = pv
+                        min_format = item.get("priceFormat", item.get("minPriceFormat", ""))
+                except (ValueError, TypeError):
+                    pass
+
+        return grade, {
+            "price": round(min_price, 2) if min_price is not None else None,
+            "format": min_format if min_format else (f"${min_price:.2f}" if min_price is not None else "-"),
+            "count": int(count) if count else 0,
+            "error": None,
+        }
+
+    # 并行请求（最多 9 个线程）
+    result = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=9) as executor:
+        futures = {executor.submit(_fetch_one, cid, grade, url): (cid, grade)
+                   for cid, grade, url in urls}
+        for future in concurrent.futures.as_completed(futures, timeout=timeout + 5):
+            try:
+                grade, data = future.result()
+                result[grade] = data
+            except Exception as e:
+                # 超时等异常
+                cid, grade = futures[future]
+                result[grade] = {"price": None, "format": "-", "count": 0, "error": f"并行请求超时: {e}"[:80]}
+
+    # 确保所有等级都有结果
+    for _, grade in CONDITION_MAP.values():
+        if grade not in result:
+            result[grade] = {"price": None, "format": "-", "count": 0, "error": "无响应"}
+
+    return result
+
+
+def format_condition_summary(condition_prices: Dict[str, Dict]) -> str:
+    """格式化成色价格摘要"""
+    parts = []
+    for grade in ["A", "B", "C", "D", "PSA 10", "PSA 9", "PSA 8 or under", "BGS 10 BL", "BGS 10 GL"]:
+        cp = condition_prices.get(grade, {})
+        if cp.get("price") is not None:
+            parts.append(f"{grade}:${cp['price']:.2f}")
+        else:
+            parts.append(f"{grade}:-")
+    return " | ".join(parts)

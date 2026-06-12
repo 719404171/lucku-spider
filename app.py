@@ -16,16 +16,16 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scraper.search_api import search_trading_cards, print_search_results
+from scraper.search_api import search_trading_cards, print_search_results, fetch_condition_prices, CONDITION_MAP
 from scraper.card_scraper import CardScraper
 from scraper.sitemap_parser import discover_all_card_urls
 
 # MySQL 导入功能（可选依赖）
 try:
-    from scraper.database import import_cards, ensure_table
+    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, debug_table_structure
     HAS_MYSQL = True
 except ImportError:
-    import_cards = ensure_table = None
+    import_cards = ensure_table = get_all_imported_ids = debug_table_structure = None
     HAS_MYSQL = False
     print("[WARN] pymysql 未安装，MySQL 导入功能不可用。pip install pymysql")
 
@@ -187,6 +187,19 @@ def api_data_delete():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/debug/table")
+@api_login_required
+def api_debug_table():
+    """调试：查看 MySQL spider_cards 表结构"""
+    if not HAS_MYSQL:
+        return jsonify({"error": "pymysql 未安装"}), 500
+    try:
+        info = debug_table_structure()
+        return jsonify(info)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/data/import-mysql", methods=["POST"])
 @api_login_required
 def api_import_mysql():
@@ -217,6 +230,18 @@ def api_import_mysql():
 
         # 确保表存在
         ensure_table()
+
+        # 调试日志
+        try:
+            tbl = debug_table_structure()
+            print(f"[DEBUG] card 表结构: {len(tbl.get('columns',[]))} 字段, {tbl.get('row_count',0)} 行")
+            print(f"[DEBUG] 字段列表: {tbl.get('columns', [])}")
+        except Exception as e:
+            print(f"[DEBUG] 查询表结构失败: {e}")
+
+        print(f"[DEBUG] 准备导入 {len(selected)} 张卡片")
+        for c in selected[:3]:
+            print(f"[DEBUG] 示例数据: id={c.get('id')}, card_name={c.get('card_name','')[:20]}, min_price={c.get('min_price')}")
 
         # 分批导入（每批 50 张，避免连接超时）
         all_success_ids = []
@@ -249,14 +274,30 @@ def api_import_mysql():
                 "error": f"导入全部失败（{total_errors} 张），请检查数据格式。示例错误: {first_errors}"
             }), 500
 
+        # 导入后验证
+        verify_count = 0
+        verify_error = None
+        try:
+            tbl = debug_table_structure()
+            verify_count = tbl.get("row_count", 0)
+            if tbl.get("error"):
+                verify_error = tbl["error"]
+        except Exception as e:
+            verify_error = str(e)
+
+        print(f"[DEBUG] 导入后验证: spider_cards 表共 {verify_count} 行")
+
         return jsonify({
             "success": True,
             "total": len(selected),
             "imported": total_imported,
             "failed": total_errors,
             "errors": all_error_details[:20],
-            "message": f"导入完成: 成功 {total_imported} 张（已从本地删除）" +
-                       (f"，失败 {total_errors} 张" if total_errors else ""),
+            "verify_row_count": verify_count,
+            "verify_error": verify_error,
+            "message": f"导入完成: 成功 {total_imported} 张" +
+                       (f"，失败 {total_errors} 张" if total_errors else "") +
+                       (f"，spider_cards 表共 {verify_count} 行" if verify_count else ""),
         })
     except Exception as e:
         err_msg = str(e)
@@ -286,6 +327,39 @@ def api_search_results():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/conditions/<card_id>")
+@api_login_required
+def api_condition_prices(card_id):
+    """获取指定卡片的成色价格（A~I）"""
+    try:
+        # 检查是否有搜索结果中的缓存数据
+        search_file = os.path.join(DATA_DIR, "search_results.json")
+        card_data = None
+        if os.path.exists(search_file):
+            with open(search_file, "r", encoding="utf-8") as f:
+                results = json.load(f)
+                for r in results:
+                    if str(r.get("id", "")) == str(card_id):
+                        card_data = r
+                        break
+
+        prices = fetch_condition_prices(card_id, card_data)
+
+        # 添加成色等级名称
+        enriched = {}
+        for cid, (grade, name) in CONDITION_MAP.items():
+            cp = prices.get(grade, {"price": None, "format": "-", "count": 0})
+            enriched[grade] = {
+                **cp,
+                "condition_id": cid,
+                "condition_name": name,
+            }
+
+        return jsonify({"success": True, "card_id": card_id, "conditions": enriched})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/crawl", methods=["POST"])
 @api_login_required
 def api_crawl():
@@ -295,12 +369,13 @@ def api_crawl():
 
     data = request.get_json()
     card_ids = data.get("card_ids", [])
+    conditions_map = data.get("conditions", {})  # {card_id: {grade: {price, count, ...}}} 从前端传入
 
     if not card_ids:
         return jsonify({"error": "请提供要爬取的卡片 ID"}), 400
 
     # 启动后台线程
-    thread = threading.Thread(target=_do_crawl, args=(card_ids,), daemon=True)
+    thread = threading.Thread(target=_do_crawl, args=(card_ids, conditions_map), daemon=True)
     thread.start()
 
     return jsonify({
@@ -320,33 +395,51 @@ def api_crawl_status():
 @app.route("/api/stats")
 @api_login_required
 def api_stats():
-    """获取数据统计"""
+    """获取数据统计 — 已导入数据从 MySQL 读取，未导入从 JSON 比对"""
+    db_cards = []
+    if HAS_MYSQL:
+        db_cards = get_all_imported_cards()
+
+    db_card_count = len(db_cards)
+
+    # 从 JSON 文件获取未导入的卡片
     data_file = os.path.join(DATA_DIR, "trading_cards.json")
     if not os.path.exists(data_file):
-        return jsonify({"success": True, "total_cards": 0, "brands": {}, "price_range": {}})
+        return jsonify({
+            "success": True,
+            "total_cards": db_card_count,
+            "imported_count": db_card_count,
+            "not_imported_count": 0,
+            "imported_cards": db_cards,
+            "not_imported_cards": [],
+            "mysql_connected": HAS_MYSQL,
+        })
 
     try:
         with open(data_file, "r", encoding="utf-8") as f:
-            cards = json.load(f)
+            local_cards = json.load(f)
 
-        # 品牌统计
-        brands = {}
-        for c in cards:
-            b = c.get("brand", "Unknown")
-            brands[b] = brands.get(b, 0) + 1
+        # 已导入的 ID
+        imported_ids = {c["id"] for c in db_cards if c.get("id")}
 
-        # 价格统计
-        prices = [c.get("min_price") for c in cards if isinstance(c.get("min_price"), (int, float))]
+        # 未导入的卡片
+        not_imported = []
+        for c in local_cards:
+            if str(c.get("id", "")) not in imported_ids:
+                not_imported.append({
+                    "id": c.get("id", ""),
+                    "name": c.get("card_name", "?"),
+                    "price": c.get("min_price"),
+                })
 
         return jsonify({
             "success": True,
-            "total_cards": len(cards),
-            "brands": dict(sorted(brands.items(), key=lambda x: -x[1])),
-            "price_range": {
-                "min": min(prices) if prices else None,
-                "max": max(prices) if prices else None,
-                "avg": round(sum(prices) / len(prices), 2) if prices else None,
-            } if prices else {},
+            "total_cards": db_card_count + len(not_imported),
+            "imported_count": db_card_count,
+            "not_imported_count": len(not_imported),
+            "imported_cards": db_cards,
+            "not_imported_cards": not_imported,
+            "mysql_connected": HAS_MYSQL,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -356,7 +449,7 @@ def api_stats():
 #  后台爬取
 # ============================================================
 
-def _do_crawl(card_ids):
+def _do_crawl(card_ids, conditions_map=None):
     """后台爬取卡片详情"""
     global crawl_status
     crawl_status["running"] = True
@@ -381,6 +474,19 @@ def _do_crawl(card_ids):
 
             if data:
                 crawl_status["match"] += 1
+                # 使用前端传入的成色价格
+                if conditions_map and cid in conditions_map:
+                    cond = conditions_map[cid]
+                    # 保存所有成色价格
+                    if "all_prices" in cond:
+                        data["condition_prices"] = cond["all_prices"]
+                    # 保存选中的成色价格
+                    selected_grade = cond.get("selected")
+                    if selected_grade and "all_prices" in cond:
+                        cp = cond["all_prices"].get(selected_grade, {})
+                        if cp.get("price") is not None:
+                            data["deal_price"] = cp["price"]
+                            data["deal_format"] = cp.get("format", f"${cp['price']:.2f}")
                 new_cards.append(data)
 
             time.sleep(0.8)
@@ -390,7 +496,12 @@ def _do_crawl(card_ids):
         all_cards = []
         if os.path.exists(data_file):
             with open(data_file, "r", encoding="utf-8") as f:
-                all_cards = json.load(f)
+                content = f.read().strip()
+                if content:
+                    all_cards = json.loads(content)
+                else:
+                    all_cards = []
+                    print(f"[WARN] {data_file} 为空，从空列表开始")
 
         # 按 ID 去重合并（新数据覆盖旧数据）
         existing_ids = {c["id"] for c in all_cards if "id" in c}
@@ -410,7 +521,10 @@ def _do_crawl(card_ids):
         crawl_status["progress"] = f"爬取完成！新增/更新 {len(new_cards)} 张卡片"
 
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
         crawl_status["progress"] = f"错误: {e}"
+        print(f"[CRAWL ERROR] {tb}")
     finally:
         crawl_status["running"] = False
 
