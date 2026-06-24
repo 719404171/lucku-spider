@@ -22,10 +22,10 @@ from scraper.sitemap_parser import discover_all_card_urls
 
 # MySQL 导入功能（可选依赖）
 try:
-    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, debug_table_structure
+    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, db_load_settings, db_save_setting, debug_table_structure
     HAS_MYSQL = True
 except ImportError:
-    import_cards = ensure_table = get_all_imported_ids = debug_table_structure = None
+    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = db_load_settings = db_save_setting = debug_table_structure = None
     HAS_MYSQL = False
     print("[WARN] pymysql 未安装，MySQL 导入功能不可用。pip install pymysql")
 
@@ -487,6 +487,7 @@ def _do_crawl(card_ids, conditions_map=None):
                         if cp.get("price") is not None:
                             data["deal_price"] = cp["price"]
                             data["deal_format"] = cp.get("format", f"${cp['price']:.2f}")
+                            data["deal_condition"] = selected_grade
                 new_cards.append(data)
 
             time.sleep(0.8)
@@ -503,17 +504,9 @@ def _do_crawl(card_ids, conditions_map=None):
                     all_cards = []
                     print(f"[WARN] {data_file} 为空，从空列表开始")
 
-        # 按 ID 去重合并（新数据覆盖旧数据）
-        existing_ids = {c["id"] for c in all_cards if "id" in c}
+        # 直接追加，不做去重（同一张卡可多次爬取）
         for nc in new_cards:
-            if nc.get("id") in existing_ids:
-                # 替换已有
-                for i, ec in enumerate(all_cards):
-                    if ec.get("id") == nc["id"]:
-                        all_cards[i] = nc
-                        break
-            else:
-                all_cards.append(nc)
+            all_cards.append(nc)
 
         with open(data_file, "w", encoding="utf-8") as f:
             json.dump(all_cards, f, ensure_ascii=False, indent=2)
@@ -527,6 +520,165 @@ def _do_crawl(card_ids, conditions_map=None):
         print(f"[CRAWL ERROR] {tb}")
     finally:
         crawl_status["running"] = False
+
+
+# ============================================================
+#  自动更新价格（定时任务）
+# ============================================================
+
+SETTINGS_FILE = os.path.join(DATA_DIR, "auto_update_settings.json")
+
+_default_settings = {
+    "enabled": False,
+    "time1": "08:00",
+    "time2": "20:00",
+}
+
+def _load_settings():
+    if HAS_MYSQL:
+        try:
+            db_raw = db_load_settings()
+            return {
+                "enabled": db_raw.get("auto_update_enabled", False),
+                "time1": db_raw.get("auto_update_time1", "08:00"),
+                "time2": db_raw.get("auto_update_time2", "20:00"),
+            }
+        except Exception:
+            pass
+    # 回退到 JSON 文件
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return dict(_default_settings)
+
+def _save_settings(s):
+    if HAS_MYSQL:
+        try:
+            db_save_setting("auto_update_enabled", s.get("enabled", False))
+            db_save_setting("auto_update_time1", s.get("time1", "08:00"))
+            db_save_setting("auto_update_time2", s.get("time2", "20:00"))
+        except Exception:
+            pass
+    # 同时写入 JSON 文件作为备份
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(s, f, ensure_ascii=False, indent=2)
+
+def _run_price_update():
+    """执行一次价格更新：遍历数据库卡片，刷新 condition_prices 和 min_price"""
+    if not HAS_MYSQL:
+        print("[AUTO_UPDATE] MySQL 不可用，跳过")
+        return
+
+    from scraper.search_api import fetch_condition_prices
+    cards = get_all_imported_cards()
+    # 按 id 去重（只保留每个 id 最新一条）
+    seen = set()
+    unique = []
+    for c in cards:
+        if c["id"] not in seen:
+            seen.add(c["id"])
+            unique.append(c)
+
+    total = len(unique)
+    success = 0
+    fail = 0
+    print(f"[AUTO_UPDATE] 开始更新 {total} 张卡片价格...")
+
+    for i, card in enumerate(unique):
+        cid = card["id"]
+        try:
+            prices = fetch_condition_prices(cid, timeout=8)
+            if prices:
+                # 计算最低价
+                vals = [v["price"] for v in prices.values() if v and v.get("price") is not None]
+                min_price = min(vals) if vals else card.get("card_cost")
+
+                updated = update_card_conditions(cid, min_price, prices)
+                if updated:
+                    success += 1
+            else:
+                fail += 1
+        except Exception as e:
+            fail += 1
+            print(f"[AUTO_UPDATE] [{cid}] 失败: {e}")
+
+        if (i + 1) % 10 == 0:
+            print(f"[AUTO_UPDATE] 进度 {i+1}/{total}")
+
+    print(f"[AUTO_UPDATE] 完成！成功 {success}，失败 {fail}，共 {total} 张")
+
+
+def _scheduler_loop():
+    """后台线程：每分钟检查一次是否需要执行定时更新"""
+    import time as _time
+    _time.sleep(10)  # 等服务器启动
+    last_run_date = ""
+    while True:
+        try:
+            settings = _load_settings()
+            if settings.get("enabled"):
+                now = datetime.now()
+                today = now.strftime("%Y-%m-%d")
+                time_str = now.strftime("%H:%M")
+                t1 = settings.get("time1", "08:00")
+                t2 = settings.get("time2", "20:00")
+
+                # 每天每个时间点只执行一次
+                run_key = f"{today}_{time_str}"
+                if (time_str == t1 or time_str == t2) and run_key != last_run_date:
+                    last_run_date = run_key
+                    print(f"[AUTO_UPDATE] 定时触发 {time_str}")
+                    try:
+                        _run_price_update()
+                    except Exception as e:
+                        print(f"[AUTO_UPDATE] 执行失败: {e}")
+        except Exception:
+            pass
+        _time.sleep(60)
+
+
+# 启动后台调度线程
+scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True)
+scheduler_thread.start()
+
+
+# ============================================================
+#  API — 自动更新设置
+# ============================================================
+
+@app.route("/api/settings/auto-update", methods=["GET"])
+@api_login_required
+def api_get_auto_update_settings():
+    return jsonify({"success": True, "settings": _load_settings()})
+
+
+@app.route("/api/settings/auto-update", methods=["POST"])
+@api_login_required
+def api_set_auto_update_settings():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "无效参数"}), 400
+    settings = _load_settings()
+    if "enabled" in data:
+        settings["enabled"] = bool(data["enabled"])
+    if "time1" in data:
+        settings["time1"] = str(data["time1"])
+    if "time2" in data:
+        settings["time2"] = str(data["time2"])
+    _save_settings(settings)
+    return jsonify({"success": True, "settings": settings})
+
+
+@app.route("/api/auto-update/run-now", methods=["POST"])
+@api_login_required
+def api_run_auto_update_now():
+    """手动触发一次价格更新"""
+    threading.Thread(target=_run_price_update, daemon=True).start()
+    return jsonify({"success": True, "message": "价格更新已启动，请稍后查看结果"})
+
 
 
 # ============================================================

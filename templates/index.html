@@ -214,7 +214,7 @@ body {
         <button class="btn btn-primary btn-sm" id="importBtn" onclick="importToMySQL()" style="display:none">导入 MySQL</button>
       </div>
       <div class="table-wrap"><table><thead>
-        <tr><th style="width:32px"><input type="checkbox" id="dataSelectAll" onchange="toggleDataAll()"></th><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>操作</th></tr>
+        <tr><th style="width:32px"><input type="checkbox" id="dataSelectAll" onchange="toggleDataAll()"></th><th>ID</th><th>名称</th><th>品牌</th><th>成色</th><th>成交价</th><th>操作</th></tr>
       </thead><tbody id="dataTableBody"></tbody></table></div>
       <div class="empty" id="dataEmpty">暂无数据，请先搜索并爬取卡片</div>
     </div>
@@ -234,7 +234,41 @@ body {
 <div class="tab-content" id="tab-stats" style="display:none">
   <div class="stats-grid" id="statsGrid"></div>
   <div class="card">
+    <h2>⏰ 自动更新价格</h2>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px">
+        <input type="checkbox" id="autoUpdateToggle" onchange="saveAutoUpdateSettings()" style="width:18px;height:18px;cursor:pointer">
+        启用自动更新
+      </label>
+      <label style="font-size:14px;display:flex;align-items:center;gap:4px">
+        时间1:
+        <input type="time" id="autoUpdateTime1" value="08:00" onchange="saveAutoUpdateSettings()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+      </label>
+      <label style="font-size:14px;display:flex;align-items:center;gap:4px">
+        时间2:
+        <input type="time" id="autoUpdateTime2" value="20:00" onchange="saveAutoUpdateSettings()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+      </label>
+      <button class="btn btn-primary btn-sm" onclick="runAutoUpdateNow()" style="padding:6px 14px;font-size:13px">立即执行</button>
+      <span id="autoUpdateStatus" style="font-size:13px;color:var(--text-muted)"></span>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
     <h2>📋 导入详情</h2>
+    <div style="display:flex;gap:10px;margin:12px 0;flex-wrap:wrap">
+      <input type="text" id="statsNameFilter" placeholder="🔍 搜索名称..." style="width:30%;max-width:260px;flex-shrink:0;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px" oninput="filterStats()">
+      <select id="statsConditionFilter" style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px" onchange="filterStats()">
+        <option value="">全部成色</option>
+        <option value="A">A</option>
+        <option value="B">B</option>
+        <option value="C">C</option>
+        <option value="D">D</option>
+        <option value="PSA 10">PSA 10</option>
+        <option value="PSA 9">PSA 9</option>
+        <option value="PSA 8 or under">PSA 8 or under</option>
+        <option value="BGS 10 BL">BGS 10 BL</option>
+        <option value="BGS 10 GL">BGS 10 GL</option>
+      </select>
+    </div>
     <div id="statsImported" style="margin-top:8px"></div>
     <div id="statsNotImported" style="margin-top:8px"></div>
   </div>
@@ -253,7 +287,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).style.display = 'block';
     if (btn.dataset.tab === 'data') loadData();
-    if (btn.dataset.tab === 'stats') loadStats();
+    if (btn.dataset.tab === 'stats') { loadStats(); loadAutoUpdateSettings(); }
   });
 });
 
@@ -496,22 +530,24 @@ function filterData() {
 
   const tbody = document.getElementById('dataTableBody');
   tbody.innerHTML = filtered.map(c => `
-    <tr data-id="${c.id}">
+    <tr data-id="${c.id}" style="font-size:15px">
       <td><input type="checkbox" class="data-check" value="${c.id}" onchange="updateBatchDelBtn()"></td>
-      <td class="text-muted">${c.id}</td>
+      <td class="text-muted" style="font-size:13px">${c.id}</td>
       <td>
-        <div style="display:flex;align-items:center;gap:10px">
-          <img src="${c.thumbnail_url || ''}?size=s" 
+        <div style="display:flex;align-items:center;gap:12px">
+          <img src="${c.thumbnail_url || ''}" 
                onerror="this.style.display='none'"
-               style="width:40px;height:56px;object-fit:cover;border-radius:4px;cursor:pointer"
-               onclick="showImage('${c.thumbnail_url || ''}?size=l', '${escapeHtml(c.card_name||'').replace(/'/g, "\\'")}')"
+               style="width:72px;height:100px;object-fit:cover;border-radius:8px;cursor:pointer;border:1px solid var(--border)"
+               data-img="${escapeHtml(c.thumbnail_url || '')}" data-title="${escapeHtml(c.card_name||'')}"
+               onclick="if(this.dataset.img) showImage(this.dataset.img, this.dataset.title)"
                alt="">
-          <a href="https://snkrdunk.com/en/trading-cards/${c.id}" target="_blank" style="color:#818cf8;text-decoration:none">${escapeHtml(c.card_name||'')}</a>
+          <a href="https://snkrdunk.com/en/trading-cards/${c.id}" target="_blank" style="color:#818cf8;text-decoration:none;font-size:15px">${escapeHtml(c.card_name||'')}</a>
         </div>
       </td>
-      <td>${escapeHtml(c.brand||'')}</td>
-      <td><strong>$${c.min_price ?? '?'}</strong></td>
-      <td><button class="btn btn-danger btn-sm" onclick="deleteCard('${c.id}')" style="padding:4px 8px;font-size:11px">删除</button></td>
+      <td style="font-size:14px">${escapeHtml(c.brand||'')}</td>
+      <td style="font-size:15px">${c.deal_condition ? `<strong>${escapeHtml(c.deal_condition)}</strong>` : '-'}</td>
+      <td style="font-size:16px"><strong>${c.deal_price != null ? (c.deal_format || '$' + c.deal_price.toFixed(2)) : ('$' + (c.min_price ?? '?'))}</strong></td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteCard('${c.id}')" style="padding:6px 12px;font-size:12px">删除</button></td>
     </tr>
   `).join('');
   updateBatchDelBtn();
@@ -619,6 +655,9 @@ async function loadStats() {
     const data = await res.json();
     if (data.error) return;
 
+    window._statsImportedData = data.imported_cards || [];
+    window._statsNotImportedData = data.not_imported_cards || [];
+
     const grid = document.getElementById('statsGrid');
     grid.innerHTML = `
       <div class="stat-card"><div class="num">${data.total_cards}</div><div class="label">本地卡片总数</div></div>
@@ -627,46 +666,116 @@ async function loadStats() {
       <div class="stat-card"><div class="num" style="font-size:14px">${data.mysql_connected ? '✅ 已连接' : '❌ 未连接'}</div><div class="label">MySQL 状态</div></div>
     `;
 
-    const imported = data.imported_cards || [];
-    const notImported = data.not_imported_cards || [];
+    // 重置筛选条件
+    document.getElementById('statsNameFilter').value = '';
+    document.getElementById('statsConditionFilter').value = '';
 
-    // 已导入列表（来自数据库）
-    const impEl = document.getElementById('statsImported');
-    if (imported.length) {
-      impEl.innerHTML = `
-        <div style="font-size:14px;font-weight:600;color:#22c55e;margin-bottom:8px">✅ 已导入 MySQL (${imported.length})</div>
-        <div class="table-wrap"><table style="font-size:12px">
-          <thead><tr><th>ID</th><th>名称</th><th>品牌</th><th>最低价</th><th>成交价</th><th>导入时间</th></tr></thead>
-          <tbody>${imported.map(c => `
-            <tr>
-              <td class="text-muted">${escapeHtml(c.id)}</td>
-              <td>${c.card_img ? `<img src="${c.card_img}?size=s" onerror="this.style.display='none'" style="width:24px;height:34px;object-fit:cover;border-radius:2px;vertical-align:middle;margin-right:4px">` : ''}${escapeHtml(c.card_name)}</td>
-              <td>${escapeHtml(c.card_brand||'')}</td>
-              <td>${c.card_cost != null ? '$' + c.card_cost : '-'}</td>
-              <td>${c.deal_price != null ? '$' + c.deal_price.toFixed(2) : '-'}</td>
-              <td class="text-muted" style="font-size:10px">${c.created_at ? c.created_at.slice(0,19).replace('T',' ') : ''}</td>
-            </tr>
-          `).join('')}</tbody>
-        </table></div>`;
-    } else {
-      impEl.innerHTML = '<div style="color:var(--text-muted);padding:8px 0">暂无已导入数据</div>';
-    }
-
-    // 未导入列表
-    const notImpEl = document.getElementById('statsNotImported');
-    if (notImported.length) {
-      notImpEl.innerHTML = `
-        <div style="font-size:14px;font-weight:600;color:#f59e0b;margin-bottom:8px">⬇ 未导入 (${notImported.length})</div>
-        <div class="table-wrap"><table style="font-size:12px">
-          <thead><tr><th>ID</th><th>名称</th><th>最低价</th></tr></thead>
-          <tbody>${notImported.map(c => `
-            <tr><td class="text-muted">${escapeHtml(c.id)}</td><td>${escapeHtml(c.name)}</td><td>${c.price != null ? '$' + c.price : '-'}</td></tr>
-          `).join('')}</tbody>
-        </table></div>`;
-    } else {
-      notImpEl.innerHTML = '<div style="color:var(--text-muted);padding:8px 0">暂无未导入数据</div>';
-    }
+    filterStats();
   } catch(e) {}
+}
+
+function filterStats() {
+  const imported = window._statsImportedData || [];
+  const notImported = window._statsNotImportedData || [];
+  const nameFilter = (document.getElementById('statsNameFilter').value || '').toLowerCase().trim();
+  const condFilter = document.getElementById('statsConditionFilter').value;
+
+  // 筛选已导入
+  const filteredImported = imported.filter(c => {
+    if (nameFilter && !(c.card_name || '').toLowerCase().includes(nameFilter)) return false;
+    if (condFilter && c.deal_condition !== condFilter) return false;
+    return true;
+  });
+
+  // 筛选未导入
+  const filteredNotImported = notImported.filter(c => {
+    if (nameFilter && !(c.name || '').toLowerCase().includes(nameFilter)) return false;
+    return true;
+  });
+
+  // 渲染已导入
+  const impEl = document.getElementById('statsImported');
+  if (filteredImported.length) {
+    impEl.innerHTML = `
+      <div style="font-size:16px;font-weight:600;color:#22c55e;margin-bottom:10px">✅ 已导入 MySQL (${filteredImported.length}${filteredImported.length < imported.length ? '/' + imported.length : ''})</div>
+      <div class="table-wrap"><table style="font-size:14px">
+        <thead><tr><th style="font-size:14px">ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">品牌</th><th style="font-size:14px">成色</th><th style="font-size:14px">成交价</th><th style="font-size:14px">导入时间</th></tr></thead>
+        <tbody>${filteredImported.map(c => `
+          <tr style="font-size:15px">
+            <td class="text-muted" style="font-size:13px">${escapeHtml(c.id)}</td>
+            <td>${c.card_img ? `<img src="${c.card_img}" onerror="this.style.display='none'" style="width:54px;height:75px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;cursor:pointer;border:1px solid var(--border)" data-img="${escapeHtml(c.card_img)}" data-title="${escapeHtml(c.card_name||'')}" onclick="showImage(this.dataset.img, this.dataset.title)">` : ''}${escapeHtml(c.card_name)}</td>
+            <td style="font-size:14px">${escapeHtml(c.card_brand||'')}</td>
+            <td style="font-size:15px">${c.deal_condition ? `<strong>${escapeHtml(c.deal_condition)}</strong>` : '-'}</td>
+            <td style="font-size:16px"><strong>${c.deal_price != null ? (c.deal_format || '$' + c.deal_price.toFixed(2)) : '-'}</strong></td>
+            <td class="text-muted" style="font-size:12px">${c.created_at ? c.created_at.slice(0,19).replace('T',' ') : ''}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table></div>`;
+  } else {
+    impEl.innerHTML = '<div style="color:var(--text-muted);padding:12px 0">暂无匹配数据</div>';
+  }
+
+  // 渲染未导入
+  const notImpEl = document.getElementById('statsNotImported');
+  if (filteredNotImported.length) {
+    notImpEl.innerHTML = `
+      <div style="font-size:16px;font-weight:600;color:#f59e0b;margin-bottom:10px">⬇ 未导入 (${filteredNotImported.length}${filteredNotImported.length < notImported.length ? '/' + notImported.length : ''})</div>
+      <div class="table-wrap"><table style="font-size:14px">
+        <thead><tr><th style="font-size:14px">ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">最低价</th></tr></thead>
+        <tbody>${filteredNotImported.map(c => `
+          <tr style="font-size:15px"><td class="text-muted" style="font-size:13px">${escapeHtml(c.id)}</td><td>${escapeHtml(c.name)}</td><td style="font-size:16px"><strong>${c.price != null ? '$' + c.price : '-'}</strong></td></tr>
+        `).join('')}</tbody>
+      </table></div>`;
+  } else {
+    notImpEl.innerHTML = '<div style="color:var(--text-muted);padding:12px 0">暂无匹配数据</div>';
+  }
+}
+
+// ============================================================
+//  自动更新价格设置
+// ============================================================
+async function loadAutoUpdateSettings() {
+  try {
+    const res = await fetch('/api/settings/auto-update');
+    const data = await res.json();
+    if (!data.success) return;
+    const s = data.settings;
+    document.getElementById('autoUpdateToggle').checked = s.enabled;
+    document.getElementById('autoUpdateTime1').value = s.time1;
+    document.getElementById('autoUpdateTime2').value = s.time2;
+  } catch(e) {}
+}
+
+async function saveAutoUpdateSettings() {
+  const enabled = document.getElementById('autoUpdateToggle').checked;
+  const time1 = document.getElementById('autoUpdateTime1').value;
+  const time2 = document.getElementById('autoUpdateTime2').value;
+  try {
+    await fetch('/api/settings/auto-update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled, time1, time2}),
+    });
+    document.getElementById('autoUpdateStatus').textContent = '✅ 设置已保存';
+    setTimeout(() => document.getElementById('autoUpdateStatus').textContent = '', 2000);
+  } catch(e) {
+    document.getElementById('autoUpdateStatus').textContent = '❌ 保存失败';
+  }
+}
+
+async function runAutoUpdateNow() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '⏳ 执行中...';
+  try {
+    const res = await fetch('/api/auto-update/run-now', {method: 'POST'});
+    const data = await res.json();
+    document.getElementById('autoUpdateStatus').textContent = '✅ ' + (data.message || '已启动');
+  } catch(e) {
+    document.getElementById('autoUpdateStatus').textContent = '❌ 启动失败';
+  }
+  btn.disabled = false;
+  btn.textContent = '立即执行';
 }
 
 // ============================================================

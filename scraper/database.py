@@ -68,6 +68,7 @@ def ensure_table():
         `card_describe` TEXT COMMENT '描述',
         `deal_price` DECIMAL(12,2) DEFAULT NULL COMMENT '选中成色价格',
         `deal_format` VARCHAR(64) DEFAULT '' COMMENT '选中成色价格格式',
+        `deal_condition` VARCHAR(32) DEFAULT '' COMMENT '选中成色等级（如 PSA 10）',
         `condition_prices` LONGTEXT DEFAULT NULL COMMENT '全部成色价格（JSON）',
         `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
         `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -83,6 +84,88 @@ def ensure_table():
         raise RuntimeError(f"创建 spider_cards 表失败: {e}")
     finally:
         conn.close()
+
+
+def ensure_settings_table():
+    """确保 app_settings 表存在"""
+    sql = """
+    CREATE TABLE IF NOT EXISTS `app_settings` (
+        `key` VARCHAR(64) PRIMARY KEY,
+        `value` TEXT DEFAULT NULL,
+        `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='应用设置'
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql)
+            # 插入默认值
+            defaults = {
+                "auto_update_enabled": "false",
+                "auto_update_time1": "08:00",
+                "auto_update_time2": "20:00",
+            }
+            for k, v in defaults.items():
+                cursor.execute(
+                    "INSERT IGNORE INTO `app_settings` (`key`, `value`) VALUES (%s, %s)",
+                    (k, v)
+                )
+        conn.commit()
+    except Exception as e:
+        raise RuntimeError(f"创建 app_settings 表失败: {e}")
+    finally:
+        conn.close()
+
+
+def db_load_settings() -> dict:
+    """从 app_settings 表读取所有设置"""
+    ensure_settings_table()
+    conn = get_connection()
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            cursor.execute("SELECT `key`, `value` FROM `app_settings`")
+            rows = cursor.fetchall()
+            result = {}
+            for r in rows:
+                val = r["value"]
+                if val == "true":
+                    val = True
+                elif val == "false":
+                    val = False
+                result[r["key"]] = val
+            return result
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+
+def db_save_setting(key: str, value):
+    """保存单条设置到 app_settings 表"""
+    if isinstance(value, bool):
+        value = "true" if value else "false"
+    else:
+        value = str(value)
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO `app_settings` (`key`, `value`) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE `value` = %s",
+                (key, value, value)
+            )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+_default_settings = {
+    "enabled": False,
+    "time1": "08:00",
+    "time2": "20:00",
+}
 
 
 def safe_decimal(value) -> Optional[float]:
@@ -113,31 +196,25 @@ def insert_card(card: Dict) -> bool:
         "card_describe": str(card.get("description", "")),
         "deal_price": safe_decimal(card.get("deal_price")),
         "deal_format": str(card.get("deal_format", "")),
+        "deal_condition": str(card.get("deal_condition", "")),
         "condition_prices": json.dumps(card.get("condition_prices", {}), ensure_ascii=False) if card.get("condition_prices") else None,
     }
 
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            # 按 crawler_id 删除旧数据
-            cursor.execute(
-                f"DELETE FROM `{TABLE_NAME}` WHERE `crawler_id` = %(crawler_id)s",
-                {"crawler_id": params["crawler_id"]}
-            )
-            conn.commit()
-
-            # 插入新数据
+            # 直接插入，不做去重（允许相同 crawler_id 多次导入）
             cursor.execute(f"""
                 INSERT INTO `{TABLE_NAME}` (
                     `crawler_id`, `crawler_url`, `en_card_name`, `card_name`,
                     `card_brand`, `card_category`, `card_cost`, `card_code`,
                     `card_img`, `card_type`, `card_describe`,
-                    `deal_price`, `deal_format`, `condition_prices`
+                    `deal_price`, `deal_format`, `deal_condition`, `condition_prices`
                 ) VALUES (
                     %(crawler_id)s, %(crawler_url)s, %(en_card_name)s, %(card_name)s,
                     %(card_brand)s, %(card_category)s, %(card_cost)s, %(card_code)s,
                     %(card_img)s, %(card_type)s, %(card_describe)s,
-                    %(deal_price)s, %(deal_format)s, %(condition_prices)s
+                    %(deal_price)s, %(deal_format)s, %(deal_condition)s, %(condition_prices)s
                 )
             """, params)
             conn.commit()
@@ -145,6 +222,33 @@ def insert_card(card: Dict) -> bool:
     except pymysql.Error as e:
         conn.rollback()
         raise RuntimeError(f"MySQL 写入失败: {e}")
+    finally:
+        conn.close()
+
+
+def update_card_conditions(crawler_id: str, min_price: float, condition_prices: dict) -> bool:
+    """根据 crawler_id 更新卡片的成色价格和最低价（更新最新一条记录）"""
+    params = {
+        "card_cost": safe_decimal(min_price),
+        "condition_prices": json.dumps(condition_prices, ensure_ascii=False) if condition_prices else None,
+        "crawler_id": crawler_id,
+    }
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE `{TABLE_NAME}`
+                SET `card_cost` = %(card_cost)s,
+                    `condition_prices` = %(condition_prices)s
+                WHERE `crawler_id` = %(crawler_id)s
+                ORDER BY `id` DESC
+                LIMIT 1
+            """, params)
+            conn.commit()
+            return cursor.rowcount > 0
+    except pymysql.Error:
+        conn.rollback()
+        return False
     finally:
         conn.close()
 
@@ -200,15 +304,34 @@ def get_all_imported_ids() -> set:
             pass
 
 
+def _update_deal_condition(crawler_id: str, deal_condition: str):
+    """将推断出的 deal_condition 写回 MySQL（更新所有相同 crawler_id 的记录）"""
+    try:
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE `{TABLE_NAME}` SET `deal_condition` = %s WHERE `crawler_id` = %s",
+                (deal_condition, crawler_id)
+            )
+            conn.commit()
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def get_all_imported_cards() -> list:
-    """从 MySQL 查询所有导入卡片的完整信息"""
+    """从 MySQL 查询所有导入卡片的完整信息（不去重，取出全部记录）"""
     try:
         conn = get_connection()
         with conn.cursor(pymysql.cursors.DictCursor) as cursor:
             cursor.execute(f"""
                 SELECT `crawler_id`, `card_name`, `en_card_name`, `card_cost`, `card_brand`,
                        `card_category`, `card_code`, `card_img`, `card_type`, `card_describe`,
-                       `deal_price`, `deal_format`, `condition_prices`, `created_at`
+                       `deal_price`, `deal_format`, `deal_condition`, `condition_prices`, `created_at`
                 FROM `{TABLE_NAME}`
                 ORDER BY `created_at` DESC
             """)
@@ -229,10 +352,35 @@ def get_all_imported_cards() -> list:
                     "card_cost": float(r["card_cost"]) if r.get("card_cost") is not None else None,
                     "deal_price": float(r["deal_price"]) if r.get("deal_price") is not None else None,
                     "deal_format": r.get("deal_format", ""),
+                    "deal_condition": r.get("deal_condition", ""),
                     "card_img": r.get("card_img", ""),
                     "condition_prices": cp,
                     "created_at": str(r.get("created_at", "")),
                 })
+
+            # 对没有 deal_condition 但有 condition_prices 的卡片，根据 deal_price 反查成色
+            deal_price_grades = ["A", "B", "C", "D", "PSA 10", "PSA 9", "PSA 8 or under", "BGS 10 BL", "BGS 10 GL"]
+            for card in result:
+                if not card["deal_condition"] and card["condition_prices"] and card["deal_price"] is not None:
+                    dp = card["deal_price"]
+                    cp = card["condition_prices"]
+                    matched = None
+                    for g in deal_price_grades:
+                        cp_g = cp.get(g, {})
+                        if cp_g and cp_g.get("price") is not None and abs(float(cp_g["price"]) - dp) < 0.01:
+                            matched = g
+                            break
+                    if not matched and card.get("deal_format"):
+                        df = card["deal_format"]
+                        for g in deal_price_grades:
+                            cp_g = cp.get(g, {})
+                            if cp_g and cp_g.get("format") == df:
+                                matched = g
+                                break
+                    if matched:
+                        card["deal_condition"] = matched
+                        # 写回数据库
+                        _update_deal_condition(card["id"], matched)
             return result
     except Exception:
         return []
