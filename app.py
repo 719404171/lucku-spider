@@ -22,10 +22,10 @@ from scraper.sitemap_parser import discover_all_card_urls
 
 # MySQL 导入功能（可选依赖）
 try:
-    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, delete_card_by_crawler_id, db_load_settings, db_save_setting, debug_table_structure
+    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, delete_card_by_crawler_id, set_card_is_update, db_load_settings, db_save_setting, debug_table_structure
     HAS_MYSQL = True
 except ImportError:
-    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = delete_card_by_crawler_id = db_load_settings = db_save_setting = debug_table_structure = None
+    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = delete_card_by_crawler_id = set_card_is_update = db_load_settings = db_save_setting = debug_table_structure = None
     HAS_MYSQL = False
     print("[WARN] pymysql 未安装，MySQL 导入功能不可用。pip install pymysql")
 
@@ -398,7 +398,7 @@ def api_stats():
     """获取数据统计 — 已导入数据从 MySQL 读取，未导入从 JSON 比对"""
     db_cards = []
     if HAS_MYSQL:
-        db_cards = get_all_imported_cards()
+        db_cards = get_all_imported_cards(only_update=False)
 
     db_card_count = len(db_cards)
 
@@ -721,6 +721,29 @@ def api_stats_delete():
         deleted = delete_card_by_crawler_id(card_id)
         if deleted:
             return jsonify({"success": True, "message": f"已删除 {card_id}"})
+        else:
+            return jsonify({"success": False, "message": "未找到匹配记录"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/stats/toggle-update", methods=["POST"])
+@api_login_required
+def api_stats_toggle_update():
+    """切换卡片的 is_update 状态"""
+    if not HAS_MYSQL:
+        return jsonify({"error": "MySQL 不可用"}), 400
+
+    data = request.get_json()
+    card_id = data.get("card_id", "")
+    is_update = data.get("is_update", True)
+    if not card_id:
+        return jsonify({"error": "请提供 card_id"}), 400
+
+    try:
+        ok = set_card_is_update(card_id, bool(is_update))
+        if ok:
+            return jsonify({"success": True, "is_update": bool(is_update), "message": f"{'启用' if is_update else '关闭'}自动更新"})
         else:
             return jsonify({"success": False, "message": "未找到匹配记录"})
     except Exception as e:

@@ -699,15 +699,24 @@ function filterStats() {
     impEl.innerHTML = `
       <div style="font-size:16px;font-weight:600;color:#22c55e;margin-bottom:10px">✅ 已导入 MySQL (${filteredImported.length}${filteredImported.length < imported.length ? '/' + imported.length : ''})</div>
       <div class="table-wrap"><table style="font-size:14px">
-        <thead><tr><th style="font-size:14px">ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">品牌</th><th style="font-size:14px">成色</th><th style="font-size:14px">成交价</th><th style="font-size:14px">导入时间</th><th style="font-size:14px">操作</th></tr></thead>
+        <thead><tr><th style="font-size:14px">ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">品牌</th><th style="font-size:14px">类型</th><th style="font-size:14px">成色</th><th style="font-size:14px">成交价</th><th style="font-size:14px">更新时间</th><th style="font-size:14px">更新</th><th style="font-size:14px">操作</th></tr></thead>
         <tbody>${filteredImported.map(c => `
           <tr style="font-size:15px">
             <td class="text-muted" style="font-size:13px">${escapeHtml(c.id)}</td>
-            <td>${c.card_img ? `<img src="${c.card_img}" onerror="this.style.display='none'" style="width:54px;height:75px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;cursor:pointer;border:1px solid var(--border)" data-img="${escapeHtml(c.card_img)}" data-title="${escapeHtml(c.card_name||'')}" onclick="showImage(this.dataset.img, this.dataset.title)">` : ''}${escapeHtml(c.card_name)}</td>
+            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.card_img ? `<img src="${c.card_img}" onerror="this.style.display='none'" style="width:40px;height:56px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-right:6px;cursor:pointer;border:1px solid var(--border)" data-img="${escapeHtml(c.card_img)}" data-title="${escapeHtml(c.card_name||'')}" onclick="showImage(this.dataset.img, this.dataset.title)">` : ''}${escapeHtml(c.card_name)}</td>
             <td style="font-size:14px">${escapeHtml(c.card_brand||'')}</td>
+            <td style="font-size:14px">${escapeHtml(c.card_type||'-')}</td>
             <td style="font-size:15px">${c.deal_condition ? `<strong>${escapeHtml(c.deal_condition)}</strong>` : '-'}</td>
-            <td style="font-size:16px"><strong>${c.deal_price != null ? (c.deal_format || '$' + c.deal_price.toFixed(2)) : '-'}</strong></td>
-            <td class="text-muted" style="font-size:12px">${c.created_at ? c.created_at.slice(0,19).replace('T',' ') : ''}</td>
+            <td style="font-size:16px"><strong>${c.deal_price != null ? '$' + c.deal_price.toFixed(2) : '-'}</strong></td>
+            <td class="text-muted" style="font-size:12px">${c.updated_at ? c.updated_at.slice(0,19).replace('T',' ') : (c.created_at ? c.created_at.slice(0,19).replace('T',' ') : '')}</td>
+            <td style="text-align:center">
+              <label class="switch" style="display:inline-block;position:relative;width:36px;height:20px;cursor:pointer">
+                <input type="checkbox" ${c.is_update ? 'checked' : ''} onchange="toggleCardUpdate('${escapeHtml(c.id)}', this.checked)" style="opacity:0;width:0;height:0">
+                <span class="switch-slider" style="position:absolute;inset:0;background:${c.is_update ? '#22c55e' : '#555'};border-radius:20px;transition:.3s">
+                  <span style="position:absolute;content:'';height:16px;width:16px;left:2px;bottom:2px;background:white;border-radius:50%;transition:.3s;transform:${c.is_update ? 'translateX(16px)' : 'translateX(0)'}"></span>
+                </span>
+              </label>
+            </td>
             <td><button class="btn btn-danger btn-sm" onclick="statsDeleteCard('${escapeHtml(c.id)}', this)" style="padding:4px 8px;font-size:11px">删除</button></td>
           </tr>
         `).join('')}</tbody>
@@ -812,6 +821,22 @@ async function statsDeleteCard(cardId, btn) {
     alert('删除失败: ' + e.message);
     btn.disabled = false;
     btn.textContent = '删除';
+  }
+}
+
+async function toggleCardUpdate(cardId, enabled) {
+  try {
+    const res = await fetch('/api/stats/toggle-update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({card_id: cardId, is_update: enabled}),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      alert('切换失败: ' + (data.message || data.error || '未知错误'));
+    }
+  } catch(e) {
+    alert('切换失败: ' + e.message);
   }
 }
 

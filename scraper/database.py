@@ -201,6 +201,11 @@ def insert_card(card: Dict) -> bool:
         "condition_prices": json.dumps(card.get("condition_prices", {}), ensure_ascii=False) if card.get("condition_prices") else None,
     }
 
+    # 根据类型决定是否自动更新：box_pack 不更新，其余默认更新
+    card_type = str(card.get("card_type", "")).lower()
+    is_update = 0 if card_type == "box_pack" else 1
+    params["is_update"] = is_update
+
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -210,12 +215,14 @@ def insert_card(card: Dict) -> bool:
                     `crawler_id`, `crawler_url`, `en_card_name`, `card_name`,
                     `card_brand`, `card_category`, `card_cost`, `card_code`,
                     `card_img`, `card_type`, `card_describe`,
-                    `deal_price`, `deal_format`, `deal_condition`, `condition_prices`
+                    `deal_price`, `deal_format`, `deal_condition`, `condition_prices`,
+                    `is_update`
                 ) VALUES (
                     %(crawler_id)s, %(crawler_url)s, %(en_card_name)s, %(card_name)s,
                     %(card_brand)s, %(card_category)s, %(card_cost)s, %(card_code)s,
                     %(card_img)s, %(card_type)s, %(card_describe)s,
-                    %(deal_price)s, %(deal_format)s, %(deal_condition)s, %(condition_prices)s
+                    %(deal_price)s, %(deal_format)s, %(deal_condition)s, %(condition_prices)s,
+                    %(is_update)s
                 )
             """, params)
             conn.commit()
@@ -356,21 +363,42 @@ def _update_deal_condition(crawler_id: str, deal_condition: str):
             pass
 
 
-def get_all_imported_cards() -> list:
-    """从 MySQL 查询所有导入卡片的完整信息（不去重，取出全部记录）"""
+def set_card_is_update(crawler_id: str, is_update: bool) -> bool:
+    """设置指定 crawler_id 的 is_update 状态"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE `{TABLE_NAME}` SET `is_update` = %s, `updated_at` = NOW() WHERE `crawler_id` = %s",
+                (1 if is_update else 0, crawler_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except pymysql.Error:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_all_imported_cards(only_update=True) -> list:
+    """从 MySQL 查询所有导入卡片的完整信息（不去重，取出全部记录）
+    only_update=True: 只返回 is_update=1 的卡片（供自动更新用）
+    only_update=False: 返回全部卡片（供统计页面展示）
+    """
     try:
         conn = get_connection()
         with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            where = "WHERE `is_update` = 1" if only_update else ""
             cursor.execute(f"""
                 SELECT `crawler_id`, `card_name`, `en_card_name`, `card_cost`, `card_brand`,
                        `card_category`, `card_code`, `card_img`, `card_type`, `card_describe`,
-                       `deal_price`, `deal_format`, `deal_condition`, `condition_prices`, `created_at`
+                       `deal_price`, `deal_format`, `deal_condition`, `condition_prices`, `is_update`, `created_at`, `updated_at`
                 FROM `{TABLE_NAME}`
-                WHERE `is_update` = 1
+                {where}
                 ORDER BY `created_at` DESC
             """)
             rows = cursor.fetchall()
-            # 转为更友好的格式
             result = []
             for r in rows:
                 cp = None
@@ -387,9 +415,12 @@ def get_all_imported_cards() -> list:
                     "deal_price": float(r["deal_price"]) if r.get("deal_price") is not None else None,
                     "deal_format": r.get("deal_format", ""),
                     "deal_condition": r.get("deal_condition", ""),
+                    "card_type": r.get("card_type", ""),
                     "card_img": r.get("card_img", ""),
                     "condition_prices": cp,
+                    "is_update": bool(r.get("is_update", 1)),
                     "created_at": str(r.get("created_at", "")),
+                    "updated_at": str(r.get("updated_at", "")),
                 })
 
             # 对没有 deal_condition 但有 condition_prices 的卡片，根据 deal_price 反查成色
