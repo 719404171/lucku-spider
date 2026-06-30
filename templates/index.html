@@ -140,6 +140,13 @@ body {
   .toast-success { background: var(--success); }
   .toast-error { background: var(--danger); }
   @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  /* 开关样式 */
+  .switch-wrap { display:inline-block; position:relative; width:36px; height:20px; cursor:pointer; }
+  .switch-wrap input { opacity:0; width:0; height:0; }
+  .switch-slider { position:absolute; inset:0; background:#555; border-radius:20px; transition:.3s; }
+  .switch-slider::after { content:''; position:absolute; height:16px; width:16px; left:2px; bottom:2px; background:white; border-radius:50%; transition:.3s; }
+  .switch-wrap input:checked + .switch-slider { background:#22c55e; }
+  .switch-wrap input:checked + .switch-slider::after { transform:translateX(16px); }
 </style>
 </head>
 <body>
@@ -710,11 +717,9 @@ function filterStats() {
             <td style="font-size:16px"><strong>${c.deal_price != null ? '$' + c.deal_price.toFixed(2) : '-'}</strong></td>
             <td class="text-muted" style="font-size:12px">${c.updated_at ? c.updated_at.slice(0,19).replace('T',' ') : (c.created_at ? c.created_at.slice(0,19).replace('T',' ') : '')}</td>
             <td style="text-align:center">
-              <label class="switch" style="display:inline-block;position:relative;width:36px;height:20px;cursor:pointer">
-                <input type="checkbox" ${c.is_update ? 'checked' : ''} onchange="toggleCardUpdate('${escapeHtml(c.id)}', this.checked)" style="opacity:0;width:0;height:0">
-                <span class="switch-slider" style="position:absolute;inset:0;background:${c.is_update ? '#22c55e' : '#555'};border-radius:20px;transition:.3s">
-                  <span style="position:absolute;content:'';height:16px;width:16px;left:2px;bottom:2px;background:white;border-radius:50%;transition:.3s;transform:${c.is_update ? 'translateX(16px)' : 'translateX(0)'}"></span>
-                </span>
+              <label class="switch-wrap">
+                <input type="checkbox" ${c.is_update ? 'checked' : ''} onchange="toggleCardUpdate('${escapeHtml(c.id)}', this.checked)">
+                <span class="switch-slider"></span>
               </label>
             </td>
             <td><button class="btn btn-danger btn-sm" onclick="statsDeleteCard('${escapeHtml(c.id)}', this)" style="padding:4px 8px;font-size:11px">删除</button></td>
