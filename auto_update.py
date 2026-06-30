@@ -4,7 +4,7 @@ SNKRDUNK 自动价格更新脚本
 用于 宝塔面板 定时任务调用，根据 Web UI 中设置的时间和成色自动更新已导入卡牌的最新价格。
 
 宝塔定时任务配置示例（每 10 分钟执行一次）：
-    cd /www/wwwroot/your_project && /www/server/pyproject_xxx/bin/python auto_update.py >> logs/auto_update.log 2>&1
+    cd /www/Python/snkrdunk  && /www/server/pyporject_evn/SpiderCard/bin/python auto_update.py >> logs/auto_update.log 2>&1
 
 脚本逻辑：
     1. 从 MySQL 读取定时设置（启用状态、时间1、时间2、选中成色）
@@ -179,13 +179,16 @@ def main():
         log("自动更新未启用（enabled=false），跳过本次执行")
         return
 
-    # 3. 检查时间是否匹配
-    if not is_time_match(settings):
-        now_str = datetime.now().strftime("%H:%M")
-        log(f"当前时间 {now_str} 未匹配 {settings['time1']} / {settings['time2']}（误差 6 分钟内），跳过")
-        return
-
-    # 4. 执行更新
+    # 3. 执行更新
+    # 【测试模式】临时跳过时间匹配检查，改为直接执行。
+    # 测试完成后，恢复为下面的代码：
+    #
+    # if not is_time_match(settings):
+    #     now_str = datetime.now().strftime("%H:%M")
+    #     log(f"当前时间 {now_str} 未匹配 {settings['time1']} / {settings['time2']}（误差 6 分钟内），跳过")
+    #     return
+    #
+    log("测试模式 — 跳过时间检查，直接执行更新")
     run_price_update()
 
 
