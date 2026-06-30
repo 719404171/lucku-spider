@@ -201,10 +201,17 @@ def insert_card(card: Dict) -> bool:
         "condition_prices": json.dumps(card.get("condition_prices", {}), ensure_ascii=False) if card.get("condition_prices") else None,
     }
 
-    # 根据类型决定是否自动更新：box_pack 不更新，其余默认更新
-    card_type = str(card.get("card_type", "")).lower()
-    is_update = 0 if card_type == "box_pack" else 1
+    # 根据类型决定是否自动更新：box_pack 不更新，single 更新
+    raw_type = str(card.get("card_type", "") or card.get("type", ""))
+    card_type_val = raw_type.lower().strip()
+    if card_type_val == "box_pack":
+        is_update = 0
+    elif card_type_val == "single":
+        is_update = 1
+    else:
+        is_update = 1  # 默认启用更新
     params["is_update"] = is_update
+    print(f"[DEBUG] insert_card {card.get('id','?')}: card_type='{raw_type}' → is_update={is_update}")
 
     conn = get_connection()
     try:
