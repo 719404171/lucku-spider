@@ -22,10 +22,10 @@ from scraper.sitemap_parser import discover_all_card_urls
 
 # MySQL 导入功能（可选依赖）
 try:
-    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, db_load_settings, db_save_setting, debug_table_structure
+    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, delete_card_by_crawler_id, db_load_settings, db_save_setting, debug_table_structure
     HAS_MYSQL = True
 except ImportError:
-    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = db_load_settings = db_save_setting = debug_table_structure = None
+    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = delete_card_by_crawler_id = db_load_settings = db_save_setting = debug_table_structure = None
     HAS_MYSQL = False
     print("[WARN] pymysql 未安装，MySQL 导入功能不可用。pip install pymysql")
 
@@ -568,13 +568,15 @@ def _save_settings(s):
 
 def _run_price_update():
     """执行一次价格更新：遍历数据库卡片，刷新 condition_prices 和 min_price"""
+    result = {"success": 0, "fail": 0, "total": 0, "skip": 0, "details": []}
     if not HAS_MYSQL:
         print("[AUTO_UPDATE] MySQL 不可用，跳过")
-        return
+        result["skip"] = 1
+        return result
 
     from scraper.search_api import fetch_condition_prices
     cards = get_all_imported_cards()
-    # 按 id 去重（只保留每个 id 最新一条）
+    # 按 id 去重
     seen = set()
     unique = []
     for c in cards:
@@ -582,21 +584,17 @@ def _run_price_update():
             seen.add(c["id"])
             unique.append(c)
 
-    total = len(unique)
-    success = 0
-    fail = 0
-    print(f"[AUTO_UPDATE] 开始更新 {total} 张卡片价格...")
+    result["total"] = len(unique)
+    print(f"[AUTO_UPDATE] 开始更新 {result['total']} 张卡片价格...")
 
     for i, card in enumerate(unique):
         cid = card["id"]
         try:
             prices = fetch_condition_prices(cid, timeout=8)
             if prices:
-                # 计算最低价
                 vals = [v["price"] for v in prices.values() if v and v.get("price") is not None]
                 min_price = min(vals) if vals else card.get("card_cost")
 
-                # 保留原来的选中成色，用新价格更新
                 old_condition = card.get("deal_condition")
                 deal_price = None
                 deal_format = None
@@ -613,17 +611,20 @@ def _run_price_update():
                     deal_format=deal_format,
                 )
                 if updated:
-                    success += 1
+                    result["success"] += 1
+                else:
+                    result["fail"] += 1
             else:
-                fail += 1
+                result["fail"] += 1
         except Exception as e:
-            fail += 1
+            result["fail"] += 1
             print(f"[AUTO_UPDATE] [{cid}] 失败: {e}")
 
         if (i + 1) % 10 == 0:
-            print(f"[AUTO_UPDATE] 进度 {i+1}/{total}")
+            print(f"[AUTO_UPDATE] 进度 {i+1}/{result['total']}")
 
-    print(f"[AUTO_UPDATE] 完成！成功 {success}，失败 {fail}，共 {total} 张")
+    print(f"[AUTO_UPDATE] 完成！成功 {result['success']}，失败 {result['fail']}，共 {result['total']} 张")
+    return result
 
 
 def _scheduler_loop():
@@ -690,10 +691,40 @@ def api_set_auto_update_settings():
 @app.route("/api/auto-update/run-now", methods=["POST"])
 @api_login_required
 def api_run_auto_update_now():
-    """手动触发一次价格更新"""
-    threading.Thread(target=_run_price_update, daemon=True).start()
-    return jsonify({"success": True, "message": "价格更新已启动，请稍后查看结果"})
+    """手动触发一次价格更新（同步执行，返回完整结果）"""
+    try:
+        result = _run_price_update()
+        return jsonify({
+            "success": True,
+            "total": result["total"],
+            "updated": result["success"],
+            "failed": result["fail"],
+            "message": f"更新完成：成功 {result['success']} 张，失败 {result['fail']} 张，共 {result['total']} 张"
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
+
+@app.route("/api/stats/delete", methods=["POST"])
+@api_login_required
+def api_stats_delete():
+    """从数据库删除指定 crawler_id 的卡片记录"""
+    if not HAS_MYSQL:
+        return jsonify({"error": "MySQL 不可用"}), 400
+
+    data = request.get_json()
+    card_id = data.get("card_id", "")
+    if not card_id:
+        return jsonify({"error": "请提供 card_id"}), 400
+
+    try:
+        deleted = delete_card_by_crawler_id(card_id)
+        if deleted:
+            return jsonify({"success": True, "message": f"已删除 {card_id}"})
+        else:
+            return jsonify({"success": False, "message": "未找到匹配记录"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================

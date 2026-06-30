@@ -227,6 +227,24 @@ def insert_card(card: Dict) -> bool:
         conn.close()
 
 
+def delete_card_by_crawler_id(crawler_id: str) -> bool:
+    """根据 crawler_id 删除 spider_cards 表中的所有匹配记录"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"DELETE FROM `{TABLE_NAME}` WHERE `crawler_id` = %s",
+                (crawler_id,)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except pymysql.Error:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def update_card_conditions(crawler_id: str, min_price: float, condition_prices: dict,
                             deal_condition: str = None, deal_price: float = None, deal_format: str = None) -> bool:
     """

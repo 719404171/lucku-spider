@@ -248,8 +248,8 @@ body {
         时间2:
         <input type="time" id="autoUpdateTime2" value="20:00" onchange="saveAutoUpdateSettings()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
       </label>
-      <button class="btn btn-primary btn-sm" onclick="runAutoUpdateNow()" style="padding:6px 14px;font-size:13px">立即执行</button>
-      <span id="autoUpdateStatus" style="font-size:13px;color:var(--text-muted)"></span>
+      <button class="btn btn-primary btn-sm" onclick="runAutoUpdateNow()" style="padding:6px 14px;font-size:13px">🔄 手动更新</button>
+      <div id="autoUpdateStatus" style="font-size:13px;color:var(--text-muted)"></div>
     </div>
   </div>
   <div class="card" style="margin-top:16px">
@@ -699,7 +699,7 @@ function filterStats() {
     impEl.innerHTML = `
       <div style="font-size:16px;font-weight:600;color:#22c55e;margin-bottom:10px">✅ 已导入 MySQL (${filteredImported.length}${filteredImported.length < imported.length ? '/' + imported.length : ''})</div>
       <div class="table-wrap"><table style="font-size:14px">
-        <thead><tr><th style="font-size:14px">ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">品牌</th><th style="font-size:14px">成色</th><th style="font-size:14px">成交价</th><th style="font-size:14px">导入时间</th></tr></thead>
+        <thead><tr><th style="font-size:14px">ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">品牌</th><th style="font-size:14px">成色</th><th style="font-size:14px">成交价</th><th style="font-size:14px">导入时间</th><th style="font-size:14px">操作</th></tr></thead>
         <tbody>${filteredImported.map(c => `
           <tr style="font-size:15px">
             <td class="text-muted" style="font-size:13px">${escapeHtml(c.id)}</td>
@@ -708,6 +708,7 @@ function filterStats() {
             <td style="font-size:15px">${c.deal_condition ? `<strong>${escapeHtml(c.deal_condition)}</strong>` : '-'}</td>
             <td style="font-size:16px"><strong>${c.deal_price != null ? (c.deal_format || '$' + c.deal_price.toFixed(2)) : '-'}</strong></td>
             <td class="text-muted" style="font-size:12px">${c.created_at ? c.created_at.slice(0,19).replace('T',' ') : ''}</td>
+            <td><button class="btn btn-danger btn-sm" onclick="statsDeleteCard('${escapeHtml(c.id)}', this)" style="padding:4px 8px;font-size:11px">删除</button></td>
           </tr>
         `).join('')}</tbody>
       </table></div>`;
@@ -765,17 +766,53 @@ async function saveAutoUpdateSettings() {
 
 async function runAutoUpdateNow() {
   const btn = event.target;
+  const statusEl = document.getElementById('autoUpdateStatus');
   btn.disabled = true;
-  btn.textContent = '⏳ 执行中...';
+  btn.textContent = '⏳ 更新中...';
+  statusEl.innerHTML = '⏳ 正在更新价格（仅限 is_update=1 的卡片），请稍候...';
   try {
     const res = await fetch('/api/auto-update/run-now', {method: 'POST'});
     const data = await res.json();
-    document.getElementById('autoUpdateStatus').textContent = '✅ ' + (data.message || '已启动');
+    if (data.success) {
+      statusEl.innerHTML = `<span style="color:#22c55e">✅ ${data.message}</span>
+        <span style="margin-left:12px;font-size:12px;color:var(--text-muted)">更新 ${data.total} 张 | 成功 ${data.updated} 张 | 失败 ${data.failed} 张</span>`;
+    } else {
+      statusEl.innerHTML = `<span style="color:#ef4444">❌ ${data.error || '更新失败'}</span>`;
+    }
   } catch(e) {
-    document.getElementById('autoUpdateStatus').textContent = '❌ 启动失败';
+    statusEl.innerHTML = `<span style="color:#ef4444">❌ 请求失败: ${e.message}</span>`;
   }
   btn.disabled = false;
-  btn.textContent = '立即执行';
+  btn.textContent = '🔄 手动更新';
+}
+
+async function statsDeleteCard(cardId, btn) {
+  if (!confirm(`确定从数据库删除卡片 ${cardId} 吗？`)) return;
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    const res = await fetch('/api/stats/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({card_id: cardId}),
+    });
+    const data = await res.json();
+    if (data.success) {
+      // 从列表中移除该行
+      const tr = btn.closest('tr');
+      if (tr) tr.remove();
+      // 刷新统计数据
+      loadStats();
+    } else {
+      alert('删除失败: ' + (data.message || data.error || '未知错误'));
+      btn.disabled = false;
+      btn.textContent = '删除';
+    }
+  } catch(e) {
+    alert('删除失败: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '删除';
+  }
 }
 
 // ============================================================

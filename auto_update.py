@@ -179,16 +179,13 @@ def main():
         log("自动更新未启用（enabled=false），跳过本次执行")
         return
 
-    # 3. 执行更新
-    # 【测试模式】临时跳过时间匹配检查，改为直接执行。
-    # 测试完成后，恢复为下面的代码：
-    #
-    # if not is_time_match(settings):
-    #     now_str = datetime.now().strftime("%H:%M")
-    #     log(f"当前时间 {now_str} 未匹配 {settings['time1']} / {settings['time2']}（误差 6 分钟内），跳过")
-    #     return
-    #
-    log("测试模式 — 跳过时间检查，直接执行更新")
+    # 3. 检查时间是否匹配
+    if not is_time_match(settings):
+        now_str = datetime.now().strftime("%H:%M")
+        log(f"当前时间 {now_str} 未匹配 {settings['time1']} / {settings['time2']}（误差 6 分钟内），跳过")
+        return
+
+    # 4. 执行更新
     run_price_update()
 
 
