@@ -70,6 +70,7 @@ def ensure_table():
         `deal_format` VARCHAR(64) DEFAULT '' COMMENT '选中成色价格格式',
         `deal_condition` VARCHAR(32) DEFAULT '' COMMENT '选中成色等级（如 PSA 10）',
         `condition_prices` LONGTEXT DEFAULT NULL COMMENT '全部成色价格（JSON）',
+        `is_update` TINYINT(1) DEFAULT 1 COMMENT '是否自动更新 1是 0否',
         `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
         `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间',
         INDEX `idx_crawler_id` (`crawler_id`)
@@ -226,20 +227,34 @@ def insert_card(card: Dict) -> bool:
         conn.close()
 
 
-def update_card_conditions(crawler_id: str, min_price: float, condition_prices: dict) -> bool:
-    """根据 crawler_id 更新卡片的成色价格和最低价（更新最新一条记录）"""
+def update_card_conditions(crawler_id: str, min_price: float, condition_prices: dict,
+                            deal_condition: str = None, deal_price: float = None, deal_format: str = None) -> bool:
+    """
+    根据 crawler_id 更新卡片的成色价格和最低价（更新最新一条记录）。
+    如果传入了 deal_condition/deal_price/deal_format，也一并更新。
+    """
+    set_clause = "`card_cost` = %(card_cost)s, `condition_prices` = %(condition_prices)s, `updated_at` = NOW()"
     params = {
         "card_cost": safe_decimal(min_price),
         "condition_prices": json.dumps(condition_prices, ensure_ascii=False) if condition_prices else None,
         "crawler_id": crawler_id,
     }
+    if deal_condition is not None:
+        set_clause += ", `deal_condition` = %(deal_condition)s"
+        params["deal_condition"] = str(deal_condition)
+    if deal_price is not None:
+        set_clause += ", `deal_price` = %(deal_price)s"
+        params["deal_price"] = safe_decimal(deal_price)
+    if deal_format is not None:
+        set_clause += ", `deal_format` = %(deal_format)s"
+        params["deal_format"] = str(deal_format)
+
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(f"""
                 UPDATE `{TABLE_NAME}`
-                SET `card_cost` = %(card_cost)s,
-                    `condition_prices` = %(condition_prices)s
+                SET {set_clause}
                 WHERE `crawler_id` = %(crawler_id)s
                 ORDER BY `id` DESC
                 LIMIT 1
@@ -333,6 +348,7 @@ def get_all_imported_cards() -> list:
                        `card_category`, `card_code`, `card_img`, `card_type`, `card_describe`,
                        `deal_price`, `deal_format`, `deal_condition`, `condition_prices`, `created_at`
                 FROM `{TABLE_NAME}`
+                WHERE `is_update` = 1
                 ORDER BY `created_at` DESC
             """)
             rows = cursor.fetchall()

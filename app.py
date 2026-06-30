@@ -596,7 +596,22 @@ def _run_price_update():
                 vals = [v["price"] for v in prices.values() if v and v.get("price") is not None]
                 min_price = min(vals) if vals else card.get("card_cost")
 
-                updated = update_card_conditions(cid, min_price, prices)
+                # 保留原来的选中成色，用新价格更新
+                old_condition = card.get("deal_condition")
+                deal_price = None
+                deal_format = None
+                if old_condition and old_condition in prices:
+                    cp = prices[old_condition]
+                    if cp and cp.get("price") is not None:
+                        deal_price = float(cp["price"])
+                        deal_format = cp.get("format", f"${deal_price:.2f}")
+
+                updated = update_card_conditions(
+                    cid, min_price, prices,
+                    deal_condition=old_condition,
+                    deal_price=deal_price,
+                    deal_format=deal_format,
+                )
                 if updated:
                     success += 1
             else:
