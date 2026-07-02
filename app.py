@@ -22,10 +22,10 @@ from scraper.sitemap_parser import discover_all_card_urls
 
 # MySQL 导入功能（可选依赖）
 try:
-    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, delete_card_by_crawler_id, set_card_is_update, db_load_settings, db_save_setting, debug_table_structure
+    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, delete_card_by_crawler_id, set_card_is_update, get_card_recycle_percent, get_card_sell_percent, update_card_price_by_crawler_id, update_product_price_by_crawler_id, db_load_settings, db_save_setting, debug_table_structure
     HAS_MYSQL = True
 except ImportError:
-    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = delete_card_by_crawler_id = set_card_is_update = db_load_settings = db_save_setting = debug_table_structure = None
+    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = delete_card_by_crawler_id = set_card_is_update = get_card_recycle_percent = get_card_sell_percent = update_card_price_by_crawler_id = update_product_price_by_crawler_id = db_load_settings = db_save_setting = debug_table_structure = None
     HAS_MYSQL = False
     print("[WARN] pymysql 未安装，MySQL 导入功能不可用。pip install pymysql")
 
@@ -587,6 +587,31 @@ def _run_price_update():
     result["total"] = len(unique)
     print(f"[AUTO_UPDATE] 开始更新 {result['total']} 张卡片价格...")
 
+    # 读取回收和售卖百分比
+    recycle_percent = 0
+    sell_percent = 0
+    try:
+        recycle_percent = get_card_recycle_percent() if 'get_card_recycle_percent' in dir() else 0
+    except Exception:
+        pass
+    try:
+        sell_percent = get_card_sell_percent() if 'get_card_sell_percent' in dir() else 0
+    except Exception:
+        pass
+    if not recycle_percent:
+        try:
+            from scraper.database import get_card_recycle_percent
+            recycle_percent = get_card_recycle_percent()
+        except Exception:
+            pass
+    if not sell_percent:
+        try:
+            from scraper.database import get_card_sell_percent
+            sell_percent = get_card_sell_percent()
+        except Exception:
+            pass
+    print(f"[AUTO_UPDATE] 卡牌回收百分比: {recycle_percent}%, 售卖百分比: {sell_percent}%")
+
     for i, card in enumerate(unique):
         cid = card["id"]
         try:
@@ -614,6 +639,22 @@ def _run_price_update():
                     result["success"] += 1
                 else:
                     result["fail"] += 1
+
+                # 同步更新 card 表的 card_price
+                if deal_price is not None and recycle_percent > 0:
+                    try:
+                        from scraper.database import update_card_price_by_crawler_id
+                        update_card_price_by_crawler_id(cid, deal_price, recycle_percent)
+                    except Exception:
+                        pass
+
+                # 同步更新 product 表的 product_price
+                if deal_price is not None and sell_percent > 0:
+                    try:
+                        from scraper.database import update_product_price_by_crawler_id
+                        update_product_price_by_crawler_id(cid, deal_price, sell_percent)
+                    except Exception:
+                        pass
             else:
                 result["fail"] += 1
         except Exception as e:

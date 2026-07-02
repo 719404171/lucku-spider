@@ -12,6 +12,8 @@ SNKRDUNK 自动价格更新脚本
     3. 如果启用且时间匹配，遍历 spider_cards 表中的卡片
     4. 调用 fetch_condition_prices 刷新各成色价格
     5. 更新数据库中对应记录的 card_cost、condition_prices、deal_price 等
+    6. 根据 shop_setting 的 card_recycle_percent 同步更新 card 表的 card_price
+    7. 根据 shop_setting 的 card_sell_percent 同步更新 product 表的 product_price
 """
 
 import json
@@ -113,6 +115,17 @@ def run_price_update():
     fail = 0
     log(f"共 {total} 张卡片需要更新")
 
+    # 读取回收和售卖百分比
+    try:
+        from scraper.database import get_card_recycle_percent, get_card_sell_percent
+        recycle_percent = get_card_recycle_percent()
+        sell_percent = get_card_sell_percent()
+        log(f"卡牌回收百分比: {recycle_percent}%, 售卖百分比: {sell_percent}%")
+    except Exception as e:
+        recycle_percent = 0
+        sell_percent = 0
+        log(f"读取 shop_setting 百分比失败: {e}")
+
     for idx, card in enumerate(cards, 1):
         cid = card["id"]
         try:
@@ -150,6 +163,22 @@ def run_price_update():
             else:
                 fail += 1
                 log(f"  [{idx}/{total}] {cid} — 数据库更新失败")
+
+            # 同步更新 card 表的 card_price
+            if deal_price is not None and recycle_percent > 0:
+                try:
+                    from scraper.database import update_card_price_by_crawler_id
+                    update_card_price_by_crawler_id(cid, deal_price, recycle_percent)
+                except Exception as e:
+                    log(f"  [{idx}/{total}] {cid} — 更新 card_price 失败: {e}")
+
+            # 同步更新 product 表的 product_price
+            if deal_price is not None and sell_percent > 0:
+                try:
+                    from scraper.database import update_product_price_by_crawler_id
+                    update_product_price_by_crawler_id(cid, deal_price, sell_percent)
+                except Exception as e:
+                    log(f"  [{idx}/{total}] {cid} — 更新 product_price 失败: {e}")
 
         except Exception as e:
             fail += 1

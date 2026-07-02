@@ -259,6 +259,92 @@ def delete_card_by_crawler_id(crawler_id: str) -> bool:
         conn.close()
 
 
+def get_card_recycle_percent() -> int:
+    """从 shop_setting 表读取 card_recycle_percent（卡牌回收百分比）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT `card_recycle_percent` FROM `shop_setting` LIMIT 1")
+            row = cursor.fetchone()
+            if row:
+                return int(row[0])
+            return 0
+    except Exception:
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def get_card_sell_percent() -> int:
+    """从 shop_setting 表读取 card_sell_percent（卡牌售卖百分比）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT `card_sell_percent` FROM `shop_setting` LIMIT 1")
+            row = cursor.fetchone()
+            if row:
+                return int(row[0])
+            return 0
+    except Exception:
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def update_card_price_by_crawler_id(crawler_id: str, deal_price: float, recycle_percent: int) -> bool:
+    """
+    根据 crawler_id 更新 card 表中所有匹配记录的 card_price。
+    card_price = deal_price * recycle_percent / 100
+    """
+    if deal_price is None or recycle_percent <= 0:
+        return False
+    card_price = deal_price * recycle_percent / 100
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE `card` SET `card_price` = %s WHERE `crawler_id` = %s",
+                (round(card_price, 2), crawler_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except pymysql.Error:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def update_product_price_by_crawler_id(crawler_id: str, deal_price: float, sell_percent: int) -> bool:
+    """
+    根据 crawler_id 更新 product 表中所有匹配记录的 product_price。
+    product_price = deal_price * sell_percent / 100
+    """
+    if deal_price is None or sell_percent <= 0:
+        return False
+    product_price = deal_price * sell_percent / 100
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE `product` SET `product_price` = %s WHERE `crawler_id` = %s",
+                (round(product_price, 2), crawler_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except pymysql.Error:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def update_card_conditions(crawler_id: str, min_price: float, condition_prices: dict,
                             deal_condition: str = None, deal_price: float = None, deal_format: str = None) -> bool:
     """
