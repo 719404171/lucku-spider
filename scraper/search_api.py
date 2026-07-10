@@ -189,56 +189,96 @@ def fetch_condition_prices(
         urls.append((cid, grade, url))
 
     def _fetch_one(cid, grade, url):
-        """抓取单个成色价格"""
+        """
+        抓取单个成色价格。
+        逐步增大 perPage 直到找到 isSold=true 的记录，取其价格作为成色价格。
+        """
         try:
-            with _urlopen(url, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="replace"))
-        except urllib.error.HTTPError as e:
-            body = ""
-            try:
-                body = e.read().decode("utf-8", errors="replace")[:100]
-            except Exception:
-                pass
-            return grade, {"price": None, "format": "-", "count": 0, "error": f"HTTP {e.code}"}
-        except json.JSONDecodeError as e:
-            return grade, {"price": None, "format": "-", "count": 0, "error": f"JSON: {e}"}
+            # 逐步增大翻页数，直到找到已售记录
+            page_sizes = [1, 5, 10, 20]
+            fallback_listings = []
+            total_count = 0
+
+            for ps in page_sizes:
+                page_url = re.sub(r"perPage=\d+", f"perPage={ps}", url)
+                try:
+                    with _urlopen(page_url, timeout=timeout) as resp:
+                        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+                except urllib.error.HTTPError as e:
+                    body = ""
+                    try:
+                        body = e.read().decode("utf-8", errors="replace")[:100]
+                    except Exception:
+                        pass
+                    return grade, {"price": None, "format": "-", "count": 0, "error": f"HTTP {e.code}"}
+                except json.JSONDecodeError as e:
+                    return grade, {"price": None, "format": "-", "count": 0, "error": f"JSON: {e}"}
+                except Exception as e:
+                    return grade, {"price": None, "format": "-", "count": 0, "error": str(e)[:80]}
+
+                # 解析 listings
+                listings = []
+                if isinstance(data, dict):
+                    listings = data.get("listings", data.get("usedListings", data.get("data", [])))
+                    if not isinstance(listings, list):
+                        listings = []
+                    total_count = data.get("listingCount", data.get("totalCount", len(listings)))
+                    if not total_count:
+                        total_count = len(listings)
+                elif isinstance(data, list):
+                    listings = data
+                    total_count = len(listings)
+                else:
+                    return grade, {"price": None, "format": "-", "count": 0, "error": "未知格式"}
+
+                fallback_listings.extend(listings)
+
+                # 检查是否找到已售记录
+                for item in listings:
+                    if item.get("isSold") is True:
+                        p = item.get("priceAmount") or item.get("price") or item.get("minPrice")
+                        if p is not None:
+                            try:
+                                pv = float(p)
+                                price_format = item.get("priceFormat", item.get("minPriceFormat", ""))
+                                if not price_format:
+                                    price_format = f"${pv:.2f}"
+                                return grade, {
+                                    "price": round(pv, 2),
+                                    "format": price_format,
+                                    "count": int(total_count) if total_count else 1,
+                                    "error": None,
+                                }
+                            except (ValueError, TypeError):
+                                pass
+
+                # 如果当前页返回数量小于 perPage，说明没有更多数据了
+                if len(listings) < ps:
+                    break
+
+            # 没有找到已售记录，回退到所有 listings 的最低价格
+            min_price = None
+            min_format = ""
+            for item in fallback_listings:
+                p = item.get("priceAmount") or item.get("price") or item.get("minPrice")
+                if p is not None:
+                    try:
+                        pv = float(p)
+                        if min_price is None or pv < min_price:
+                            min_price = pv
+                            min_format = item.get("priceFormat", item.get("minPriceFormat", ""))
+                    except (ValueError, TypeError):
+                        pass
+
+            return grade, {
+                "price": round(min_price, 2) if min_price is not None else None,
+                "format": min_format if min_format else (f"${min_price:.2f}" if min_price is not None else "-"),
+                "count": int(total_count) if total_count else 0,
+                "error": None,
+            }
+
         except Exception as e:
             return grade, {"price": None, "format": "-", "count": 0, "error": str(e)[:80]}
-
-        # 解析
-        listings = []
-        if isinstance(data, dict):
-            listings = data.get("listings", data.get("usedListings", data.get("data", [])))
-            if not isinstance(listings, list):
-                listings = []
-            count = data.get("listingCount", data.get("totalCount", len(listings)))
-            if not count:
-                count = len(listings)
-        elif isinstance(data, list):
-            listings = data
-            count = len(listings)
-        else:
-            return grade, {"price": None, "format": "-", "count": 0, "error": "未知格式"}
-
-        min_price = None
-        min_format = ""
-        for item in listings:
-            p = item.get("priceAmount") or item.get("price") or item.get("minPrice")
-            if p is not None:
-                try:
-                    pv = float(p)
-                    if min_price is None or pv < min_price:
-                        min_price = pv
-                        min_format = item.get("priceFormat", item.get("minPriceFormat", ""))
-                except (ValueError, TypeError):
-                    pass
-
-        return grade, {
-            "price": round(min_price, 2) if min_price is not None else None,
-            "format": min_format if min_format else (f"${min_price:.2f}" if min_price is not None else "-"),
-            "count": int(count) if count else 0,
-            "error": None,
-        }
 
     # 并行请求（最多 9 个线程）
     result = {}
