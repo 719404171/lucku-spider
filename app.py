@@ -22,10 +22,10 @@ from scraper.sitemap_parser import discover_all_card_urls
 
 # MySQL 导入功能（可选依赖）
 try:
-    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, delete_card_by_crawler_id, set_card_is_update, get_card_recycle_percent, get_card_sell_percent, update_card_price_by_crawler_id, update_product_price_by_crawler_id, db_load_settings, db_save_setting, debug_table_structure
+    from scraper.database import import_cards, ensure_table, get_all_imported_ids, get_all_imported_cards, update_card_conditions, delete_card_by_crawler_id, delete_card_by_row_id, set_card_is_update, get_card_recycle_percent, get_card_sell_percent, update_card_price_by_crawler_id, update_product_price_by_crawler_id, db_load_settings, db_save_setting, debug_table_structure
     HAS_MYSQL = True
 except ImportError:
-    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = delete_card_by_crawler_id = set_card_is_update = get_card_recycle_percent = get_card_sell_percent = update_card_price_by_crawler_id = update_product_price_by_crawler_id = db_load_settings = db_save_setting = debug_table_structure = None
+    import_cards = ensure_table = get_all_imported_ids = get_all_imported_cards = update_card_conditions = delete_card_by_crawler_id = delete_card_by_row_id = set_card_is_update = get_card_recycle_percent = get_card_sell_percent = update_card_price_by_crawler_id = update_product_price_by_crawler_id = db_load_settings = db_save_setting = debug_table_structure = None
     HAS_MYSQL = False
     print("[WARN] pymysql 未安装，MySQL 导入功能不可用。pip install pymysql")
 
@@ -762,6 +762,28 @@ def api_stats_delete():
         deleted = delete_card_by_crawler_id(card_id)
         if deleted:
             return jsonify({"success": True, "message": f"已删除 {card_id}"})
+        else:
+            return jsonify({"success": False, "message": "未找到匹配记录"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/stats/delete-row", methods=["POST"])
+@api_login_required
+def api_stats_delete_row():
+    """根据 MySQL 自增 id 删除单条记录"""
+    if not HAS_MYSQL:
+        return jsonify({"error": "MySQL 不可用"}), 400
+
+    data = request.get_json()
+    row_id = data.get("row_id")
+    if not row_id:
+        return jsonify({"error": "请提供 row_id"}), 400
+
+    try:
+        deleted = delete_card_by_row_id(int(row_id))
+        if deleted:
+            return jsonify({"success": True, "message": f"已删除 ID={row_id}"})
         else:
             return jsonify({"success": False, "message": "未找到匹配记录"})
     except Exception as e:

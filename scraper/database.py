@@ -279,6 +279,24 @@ def delete_card_by_crawler_id(crawler_id: str) -> bool:
         conn.close()
 
 
+def delete_card_by_row_id(row_id: int) -> bool:
+    """根据 MySQL 自增 id 删除单条记录"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"DELETE FROM `{TABLE_NAME}` WHERE `id` = %s",
+                (row_id,)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except pymysql.Error:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def get_card_recycle_percent() -> int:
     """从 shop_setting 表读取 card_recycle_percent（卡牌回收百分比）"""
     conn = get_connection()
@@ -504,7 +522,7 @@ def get_all_imported_cards(only_update=True) -> list:
         with conn.cursor(pymysql.cursors.DictCursor) as cursor:
             where = "WHERE `is_update` = 1" if only_update else ""
             cursor.execute(f"""
-                SELECT `crawler_id`, `card_name`, `en_card_name`, `card_cost`, `card_brand`,
+                SELECT `id`, `crawler_id`, `card_name`, `en_card_name`, `card_cost`, `card_brand`,
                        `card_category`, `card_code`, `card_img`, `card_type`, `card_describe`,
                        `deal_price`, `deal_format`, `deal_condition`, `condition_prices`, `is_update`, `created_at`, `updated_at`
                 FROM `{TABLE_NAME}`
@@ -521,6 +539,7 @@ def get_all_imported_cards(only_update=True) -> list:
                     except (json.JSONDecodeError, TypeError):
                         cp = None
                 result.append({
+                    "row_id": r.get("id"),
                     "id": r.get("crawler_id", ""),
                     "card_name": r.get("card_name", r.get("en_card_name", "")),
                     "card_brand": r.get("card_brand", ""),
