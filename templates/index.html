@@ -257,6 +257,7 @@ body {
         <input type="time" id="autoUpdateTime2" value="20:00" onchange="saveAutoUpdateSettings()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
       </label>
       <button class="btn btn-primary btn-sm" onclick="runAutoUpdateNow()" style="padding:6px 14px;font-size:13px">🔄 手动更新</button>
+      <button class="btn btn-sm" onclick="loadStats();toast('已刷新','success')" style="background:var(--bg-card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px">🔃 刷新统计</button>
       <div id="autoUpdateStatus" style="font-size:13px;color:var(--text-muted)"></div>
     </div>
   </div>
