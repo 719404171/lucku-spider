@@ -216,22 +216,42 @@ def insert_card(card: Dict) -> bool:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            # 直接插入，不做去重（允许相同 crawler_id 多次导入）
-            cursor.execute(f"""
-                INSERT INTO `{TABLE_NAME}` (
-                    `crawler_id`, `crawler_url`, `en_card_name`, `card_name`,
-                    `card_brand`, `card_category`, `card_cost`, `card_code`,
-                    `card_img`, `card_type`, `card_describe`,
-                    `deal_price`, `deal_format`, `deal_condition`, `condition_prices`,
-                    `is_update`
-                ) VALUES (
-                    %(crawler_id)s, %(crawler_url)s, %(en_card_name)s, %(card_name)s,
-                    %(card_brand)s, %(card_category)s, %(card_cost)s, %(card_code)s,
-                    %(card_img)s, %(card_type)s, %(card_describe)s,
-                    %(deal_price)s, %(deal_format)s, %(deal_condition)s, %(condition_prices)s,
-                    %(is_update)s
-                )
-            """, params)
+            # 查找是否存在相同 crawler_id + deal_condition 的记录
+            deal_cond = params["deal_condition"]
+            cursor.execute(
+                f"SELECT `id` FROM `{TABLE_NAME}` WHERE `crawler_id` = %s AND `deal_condition` = %s ORDER BY `id` DESC LIMIT 1",
+                (params["crawler_id"], deal_cond)
+            )
+            existing = cursor.fetchone()
+
+            if existing:
+                # 相同卡牌 + 相同成色 → 更新价格
+                cursor.execute(f"""
+                    UPDATE `{TABLE_NAME}` SET
+                        `card_cost` = %(card_cost)s,
+                        `deal_price` = %(deal_price)s,
+                        `deal_format` = %(deal_format)s,
+                        `condition_prices` = %(condition_prices)s,
+                        `updated_at` = NOW()
+                    WHERE `id` = %(existing_id)s
+                """, {**params, "existing_id": existing[0]})
+            else:
+                # 相同卡牌 + 不同成色（或新卡牌）→ 插入新记录
+                cursor.execute(f"""
+                    INSERT INTO `{TABLE_NAME}` (
+                        `crawler_id`, `crawler_url`, `en_card_name`, `card_name`,
+                        `card_brand`, `card_category`, `card_cost`, `card_code`,
+                        `card_img`, `card_type`, `card_describe`,
+                        `deal_price`, `deal_format`, `deal_condition`, `condition_prices`,
+                        `is_update`
+                    ) VALUES (
+                        %(crawler_id)s, %(crawler_url)s, %(en_card_name)s, %(card_name)s,
+                        %(card_brand)s, %(card_category)s, %(card_cost)s, %(card_code)s,
+                        %(card_img)s, %(card_type)s, %(card_describe)s,
+                        %(deal_price)s, %(deal_format)s, %(deal_condition)s, %(condition_prices)s,
+                        %(is_update)s
+                    )
+                """, params)
             conn.commit()
             return True
     except pymysql.Error as e:

@@ -1,0 +1,4 @@
+启动 Web UI: http://127.0.0.1:5000
+数据目录: D:\AiProject\SpiderCard\data
+ * Serving Flask app 'app'
+ * Debug mode: off

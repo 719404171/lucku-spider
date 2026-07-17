@@ -1,1 +1,108 @@
-[]
+[
+  {
+    "id": "92138",
+    "url": "https://snkrdunk.com/en/trading-cards/92138",
+    "title": "_’s Chansey: Old Back[PMCG-G2 No.113](Gym Expansion 2 \"Challenge from the Darkness\")",
+    "card_name": "_’s Chansey: Old Back[PMCG-G2 No.113](Gym Expansion 2 \"Challenge from the Darkness\")",
+    "brand": "Pokemon Card Game",
+    "category": "Trading Cards (Single Card)",
+    "min_price": 31,
+    "min_price_currency": "USD",
+    "min_price_format": "US $31",
+    "listing_count": "0",
+    "offer_count": "0",
+    "used_listing_count": 12,
+    "used_listing_count_text": "12",
+    "used_min_price": "US $31",
+    "used_min_price_currency": "USD",
+    "used_min_price_format": "",
+    "max_price": "US $ -",
+    "max_price_amount": null,
+    "max_price_currency": "",
+    "max_price_format": "",
+    "release_date": "1999-06-24T15:00:00Z",
+    "product_code": "pkmn-tcg-1364",
+    "thumbnail_url": "https://cdn.snkrdunk.com/upload_bg_removed/7302517.webp?size=l",
+    "card_type": "single",
+    "description": "Buy _’s Chansey: Old Back[PMCG-G2 No.113](Gym Expansion 2 \"Challenge from the Darkness\") at the lowest price on SNKRDUNK. We guarantee the items are 100% authentic.",
+    "image_urls": [],
+    "image_count": 0,
+    "condition_prices": {
+      "A": {
+        "condition_id": 18,
+        "condition_name": "A",
+        "count": 0,
+        "error": null,
+        "format": "-",
+        "price": null
+      },
+      "B": {
+        "condition_id": 19,
+        "condition_name": "B",
+        "count": 4,
+        "error": null,
+        "format": "$37.00",
+        "price": 37
+      },
+      "BGS 10 BL": {
+        "condition_id": 25,
+        "condition_name": "BGS 10 BL",
+        "count": 0,
+        "error": null,
+        "format": "-",
+        "price": null
+      },
+      "BGS 10 GL": {
+        "condition_id": 26,
+        "condition_name": "BGS 10 GL",
+        "count": 0,
+        "error": null,
+        "format": "-",
+        "price": null
+      },
+      "C": {
+        "condition_id": 20,
+        "condition_name": "C",
+        "count": 1,
+        "error": null,
+        "format": "$59.00",
+        "price": 59
+      },
+      "D": {
+        "condition_id": 21,
+        "condition_name": "D",
+        "count": 5,
+        "error": null,
+        "format": "$22.00",
+        "price": 22
+      },
+      "PSA 10": {
+        "condition_id": 22,
+        "condition_name": "PSA 10",
+        "count": 5,
+        "error": null,
+        "format": "$926.00",
+        "price": 926
+      },
+      "PSA 8 or under": {
+        "condition_id": 24,
+        "condition_name": "PSA 8 or under",
+        "count": 2,
+        "error": null,
+        "format": "$343.00",
+        "price": 343
+      },
+      "PSA 9": {
+        "condition_id": 23,
+        "condition_name": "PSA 9",
+        "count": 3,
+        "error": null,
+        "format": "$73.00",
+        "price": 73
+      }
+    },
+    "deal_price": 926,
+    "deal_format": "$926.00",
+    "deal_condition": "PSA 10"
+  }
+]

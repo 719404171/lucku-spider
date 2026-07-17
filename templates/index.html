@@ -213,14 +213,14 @@ body {
 
   <!-- Tab: Data -->
   <div class="tab-content" id="tab-data" style="display:none">
-    <div class="card">
+    <div class="card" style="width:100%;max-width:none">
       <h2>已保存卡片数据</h2>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
         <input class="filter-input" type="text" id="dataFilter" placeholder="过滤名称..." oninput="filterData()" style="flex:1;margin-bottom:0;min-width:200px">
         <button class="btn btn-danger btn-sm" id="batchDelBtn" onclick="batchDelete()" style="display:none">删除选中</button>
         <button class="btn btn-primary btn-sm" id="importBtn" onclick="importToMySQL()" style="display:none">导入 MySQL</button>
       </div>
-      <div class="table-wrap"><table><thead>
+      <div class="table-wrap"><table style="width:100%"><thead>
         <tr><th style="width:32px"><input type="checkbox" id="dataSelectAll" onchange="toggleDataAll()"></th><th>ID</th><th>名称</th><th>品牌</th><th>成色</th><th>成交价</th><th>操作</th></tr>
       </thead><tbody id="dataTableBody"></tbody></table></div>
       <div class="empty" id="dataEmpty">暂无数据，请先搜索并爬取卡片</div>
@@ -706,12 +706,12 @@ function filterStats() {
     impEl.innerHTML = `
       <div style="font-size:16px;font-weight:600;color:#22c55e;margin-bottom:10px">✅ 已导入 MySQL (${filteredImported.length}${filteredImported.length < imported.length ? '/' + imported.length : ''})</div>
       <div class="table-wrap"><table style="font-size:14px">
-        <thead><tr><th style="font-size:14px">ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">品牌</th><th style="font-size:14px">类型</th><th style="font-size:14px">成色</th><th style="font-size:14px">成交价</th><th style="font-size:14px">更新时间</th><th style="font-size:14px">更新</th><th style="font-size:14px">操作</th></tr></thead>
+        <thead><tr><th style="font-size:14px">爬蟲ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">品牌</th><th style="font-size:14px">类型</th><th style="font-size:14px">成色</th><th style="font-size:14px">成交价</th><th style="font-size:14px">更新时间</th><th style="font-size:14px">更新</th><th style="font-size:14px">操作</th></tr></thead>
         <tbody>${filteredImported.map(c => `
           <tr style="font-size:15px">
             <td class="text-muted" style="font-size:13px">${escapeHtml(c.id)}</td>
-            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.card_img ? `<img src="${c.card_img}" onerror="this.style.display='none'" style="width:40px;height:56px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-right:6px;cursor:pointer;border:1px solid var(--border)" data-img="${escapeHtml(c.card_img)}" data-title="${escapeHtml(c.card_name||'')}" onclick="showImage(this.dataset.img, this.dataset.title)">` : ''}${escapeHtml(c.card_name)}</td>
-            <td style="font-size:14px">${escapeHtml(c.card_brand||'')}</td>
+            <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(c.card_name||'')}">${c.card_img ? `<img src="${c.card_img}" onerror="this.style.display='none'" style="width:40px;height:56px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-right:6px;cursor:pointer;border:1px solid var(--border)" data-img="${escapeHtml(c.card_img)}" data-title="${escapeHtml(c.card_name||'')}" onclick="showImage(this.dataset.img, this.dataset.title)">` : ''}${escapeHtml(c.card_name)}</td>
+            <td style="max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px" title="${escapeHtml(c.card_brand||'')}">${escapeHtml(c.card_brand||'')}</td>
             <td style="font-size:14px">${escapeHtml(c.card_type||'-')}</td>
             <td style="font-size:15px">${c.deal_condition ? `<strong>${escapeHtml(c.deal_condition)}</strong>` : '-'}</td>
             <td style="font-size:16px"><strong>${c.deal_price != null ? '$' + c.deal_price.toFixed(2) : '-'}</strong></td>
