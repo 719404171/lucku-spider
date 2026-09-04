@@ -89,6 +89,13 @@ def run_price_update():
     log("=" * 50)
     log("开始价格更新...")
 
+    # 每次自动更新前抓取一次最新汇率（JPY→HKD）并写库，失败则用库内最新
+    try:
+        from scraper import fx as _fxmod
+        _fxmod.get_hkd_rate(refresh=True)
+    except Exception:
+        pass
+
     try:
         from scraper.database import get_all_imported_cards, update_card_conditions
         from scraper.search_api import fetch_condition_prices

@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -16,9 +17,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scraper.search_api import search_trading_cards, print_search_results, fetch_condition_prices, CONDITION_MAP
-from scraper.card_scraper import CardScraper
-from scraper.sitemap_parser import discover_all_card_urls
+from scraper.search_api import search_trading_cards, fetch_condition_prices, fetch_product_detail, fetch_card_detail, condition_effective_price
 
 # MySQL 导入功能（可选依赖）
 try:
@@ -41,6 +40,18 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 # 全局状态
 crawl_status = {"running": False, "progress": "", "total": 0, "done": 0, "match": 0}
+
+# ============================================================
+#  汇率（JPY -> HKD，存入 fx_rate 表；每次查询自动抓新汇率，
+#  抓不到就用数据库最新汇率）
+# ============================================================
+def get_fx_rate() -> dict:
+    """返回汇率信息：优先接口新值并已入库；失败用库内最新"""
+    from scraper import fx as _fxmod
+    info = _fxmod.get_hkd_rate(refresh=True)
+    if not info:
+        return {"rate": None, "source": "", "fetched_at": ""}
+    return dict(info)
 
 
 # ============================================================
@@ -65,6 +76,21 @@ def api_login_required(view):
             return jsonify({"error": "未登录，请先登录"}), 401
         return view(**kwargs)
     return wrapped_view
+
+
+@app.route("/api/rate")
+@api_login_required
+def api_rate():
+    """返回 JPY→HKD 汇率与来源时间（优先接口新汇率并已入库，失败用库内最新）"""
+    info = get_fx_rate()
+    return jsonify({
+        "success": info.get("rate") is not None,
+        "base": "JPY",
+        "quote": "HKD",
+        "rate": info.get("rate"),
+        "source": info.get("source", ""),
+        "fetched_at": info.get("fetched_at", ""),
+    })
 
 
 # ============================================================
@@ -112,7 +138,7 @@ def index():
 @app.route("/api/search")
 @api_login_required
 def api_search():
-    """搜索交易卡"""
+    """搜索交易卡（新站 snkrdunk.com/search，固定枚数 = 1枚）"""
     keyword = request.args.get("keyword", "").strip()
     max_results = int(request.args.get("max", 50))
 
@@ -330,34 +356,50 @@ def api_search_results():
 @app.route("/api/conditions/<card_id>")
 @api_login_required
 def api_condition_prices(card_id):
-    """获取指定卡片的成色价格（A~I）"""
+    """获取指定卡片的详情与各状态价格（来源 https://snkrdunk.com/apparels/{id}，价格已换港币）。
+    可选 ?catalog={productCatalogId}：已知 catalog 时详情页与交易履历并行抓取，加载更快。"""
     try:
-        # 检查是否有搜索结果中的缓存数据
-        search_file = os.path.join(DATA_DIR, "search_results.json")
-        card_data = None
-        if os.path.exists(search_file):
-            with open(search_file, "r", encoding="utf-8") as f:
-                results = json.load(f)
-                for r in results:
-                    if str(r.get("id", "")) == str(card_id):
-                        card_data = r
-                        break
-
-        prices = fetch_condition_prices(card_id, card_data)
-
-        # 添加成色等级名称
-        enriched = {}
-        for cid, (grade, name) in CONDITION_MAP.items():
-            cp = prices.get(grade, {"price": None, "format": "-", "count": 0})
-            enriched[grade] = {
-                **cp,
-                "condition_id": cid,
-                "condition_name": name,
-            }
-
-        return jsonify({"success": True, "card_id": card_id, "conditions": enriched})
+        catalog = request.args.get("catalog") or None
+        detail = fetch_card_detail(card_id, catalog_id=catalog)
+        if detail is None:
+            return jsonify({"error": f"抓取详情失败（ID={card_id}），请确认该商品存在"}), 502
+        return jsonify({"success": True, **detail})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/search-details", methods=["POST"])
+@api_login_required
+def api_search_details():
+    """批量抓取搜索结果里多张卡片的详情/成色价格（服务端并发，结果按 id 返回）。
+
+    Body: {"items": [{"id": "730968", "catalog_id": "844057"}, ...]}
+    已知 catalog_id 的卡片，其详情页与交易履历会并行抓取。
+    """
+    data = request.get_json() or {}
+    items = data.get("items") or []
+    if not items:
+        return jsonify({"error": "缺少 items"}), 400
+
+    def _one(item):
+        cid = str(item.get("id") or "").strip()
+        if not cid:
+            return cid, None
+        catalog = item.get("catalog_id") or None
+        try:
+            detail = fetch_card_detail(cid, timeout=15, catalog_id=catalog)
+            return cid, detail
+        except Exception as e:
+            print(f"[SEARCH-DETAILS] {cid} 失败: {e}")
+            return cid, None
+
+    details = {}
+    with ThreadPoolExecutor(max_workers=min(6, max(1, len(items)))) as pool:
+        for cid, detail in pool.map(_one, items):
+            if detail is not None:
+                details[cid] = detail
+
+    return jsonify({"success": True, "count": len(details), "details": details})
 
 
 @app.route("/api/crawl", methods=["POST"])
@@ -459,7 +501,12 @@ def _do_crawl(card_ids, conditions_map=None):
     crawl_status["progress"] = "初始化..."
 
     try:
-        scraper = CardScraper(delay=0.8, output_dir=DATA_DIR)
+        # 每次爬取任务开始前抓取一次最新汇率（JPY→HKD）并写库
+        try:
+            from scraper import fx as _fxmod
+            _fxmod.get_hkd_rate(refresh=True)
+        except Exception:
+            pass
         new_cards = []
 
         for i, cid in enumerate(card_ids):
@@ -469,24 +516,23 @@ def _do_crawl(card_ids, conditions_map=None):
             crawl_status["done"] = i
             crawl_status["progress"] = f"正在爬取 [{i+1}/{len(card_ids)}] ID={cid}"
 
-            url = f"https://snkrdunk.com/en/trading-cards/{cid}"
-            data = scraper.scrape_card(url)
+            data = fetch_product_detail(cid)
 
             if data:
                 crawl_status["match"] += 1
-                # 使用前端传入的成色价格
+                # 使用前端传入的状态价格（如有）
                 if conditions_map and cid in conditions_map:
                     cond = conditions_map[cid]
-                    # 保存所有成色价格
-                    if "all_prices" in cond:
+                    if cond.get("all_prices"):
                         data["condition_prices"] = cond["all_prices"]
-                    # 保存选中的成色价格
                     selected_grade = cond.get("selected")
-                    if selected_grade and "all_prices" in cond:
-                        cp = cond["all_prices"].get(selected_grade, {})
-                        if cp.get("price") is not None:
-                            data["deal_price"] = cp["price"]
-                            data["deal_format"] = cp.get("format", f"${cp['price']:.2f}")
+                    if selected_grade and cond.get("all_prices"):
+                        cp = cond["all_prices"].get(selected_grade, {}) or {}
+                        # 存所选成色「chip 显示的港币价」= 最新已售优先，无成交退回在售价
+                        eff_price, eff_format = condition_effective_price(cp)
+                        if eff_price is not None:
+                            data["deal_price"] = eff_price
+                            data["deal_format"] = eff_format or f"${eff_price:.2f}"
                             data["deal_condition"] = selected_grade
                 new_cards.append(data)
 
@@ -575,6 +621,12 @@ def _run_price_update():
         return result
 
     from scraper.search_api import fetch_condition_prices
+    # 每次自动更新前抓取一次最新汇率（JPY→HKD）并写库，失败则用库内最新
+    try:
+        from scraper import fx as _fxmod
+        _fxmod.get_hkd_rate(refresh=True)
+    except Exception:
+        pass
     cards = get_all_imported_cards()
     # 按 id 去重
     seen = set()
@@ -615,23 +667,32 @@ def _run_price_update():
     for i, card in enumerate(unique):
         cid = card["id"]
         try:
-            prices = fetch_condition_prices(cid, timeout=8)
+            prices = fetch_condition_prices(cid, timeout=8, fresh=True)
             if prices:
-                vals = [v["price"] for v in prices.values() if v and v.get("price") is not None]
-                min_price = min(vals) if vals else card.get("card_cost")
+                # 有效成交价 = 最新已售(1枚)优先，无已售记录退回当前在售价
+                eff = {}
+                for g, v in prices.items():
+                    if not v:
+                        continue
+                    p, f = condition_effective_price(v)
+                    if p is not None:
+                        eff[g] = (float(p), f or f"${float(p):.2f}")
+                if not eff:
+                    result["fail"] += 1
+                    continue
+
+                min_price = min(p for p, _ in eff.values())
 
                 old_condition = card.get("deal_condition")
-                deal_price = None
-                deal_format = None
-                if old_condition and old_condition in prices:
-                    cp = prices[old_condition]
-                    if cp and cp.get("price") is not None:
-                        deal_price = float(cp["price"])
-                        deal_format = cp.get("format", f"${deal_price:.2f}")
+                deal_condition = old_condition if (old_condition and old_condition in eff) else None
+                if not deal_condition:
+                    # 原成色已无有效价时，自动改用最低有效价成色
+                    deal_condition = min(eff, key=lambda g: eff[g][0])
+                deal_price, deal_format = eff[deal_condition]
 
                 updated = update_card_conditions(
                     cid, min_price, prices,
-                    deal_condition=old_condition,
+                    deal_condition=deal_condition,
                     deal_price=deal_price,
                     deal_format=deal_format,
                 )
@@ -811,6 +872,91 @@ def api_stats_toggle_update():
             return jsonify({"success": False, "message": "未找到匹配记录"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/stats/update-card", methods=["POST"])
+@api_login_required
+def api_stats_update_card():
+    """手动更新单张卡片：即时抓取最新各成色价格并写库，同步重算回收/售价"""
+    if not HAS_MYSQL:
+        return jsonify({"error": "MySQL 不可用"}), 400
+
+    data = request.get_json()
+    card_id = str(data.get("card_id", "")).strip()
+    if not card_id:
+        return jsonify({"error": "请提供 card_id"}), 400
+
+    try:
+        # 抓取最新汇率（成功写库；失败用库内最新）
+        try:
+            from scraper import fx as _fxmod
+            _fxmod.get_hkd_rate(refresh=True)
+        except Exception:
+            pass
+
+        # 读取该 crawler_id 现有记录（保留原选中成色）
+        existing = [x for x in get_all_imported_cards(only_update=False) if str(x.get("id", "")) == card_id]
+        if not existing:
+            return jsonify({"success": False, "error": f"数据库未找到 crawler_id={card_id} 的记录"}), 404
+        old_condition = existing[0].get("deal_condition") or ""
+
+        prices = fetch_condition_prices(card_id, timeout=15, fresh=True)
+        if not prices:
+            return jsonify({"success": False, "error": "抓取不到该卡片价格，可能已下架或无在售"}), 502
+
+        # 有效成交价 = 最新已售(1枚)优先，无已售记录退回当前在售价
+        eff = {}
+        for g, v in prices.items():
+            if not v:
+                continue
+            p, f = condition_effective_price(v)
+            if p is not None:
+                eff[g] = (float(p), f or f"${float(p):.2f}")
+        if not eff:
+            return jsonify({"success": False, "error": "抓取不到可用成交价/在售价"}), 502
+        min_price = min(p for p, _ in eff.values())
+
+        deal_condition = old_condition if (old_condition and old_condition in eff) else None
+        if not deal_condition:
+            # 原成色已无有效价时，自动改用当前最低有效价成色
+            deal_condition = min(eff, key=lambda g: eff[g][0])
+        deal_price, deal_format = eff[deal_condition]
+
+        ok = update_card_conditions(
+            card_id, min_price, prices,
+            deal_condition=deal_condition,
+            deal_price=deal_price,
+            deal_format=deal_format,
+        )
+        if not ok:
+            return jsonify({"success": False, "error": "写入数据库失败"}), 500
+
+        # 同步 card_price / product_price（按已设定的百分比）
+        recycle_percent = sell_percent = 0
+        try:
+            recycle_percent = get_card_recycle_percent()
+        except Exception:
+            pass
+        try:
+            sell_percent = get_card_sell_percent()
+        except Exception:
+            pass
+        if deal_price is not None and recycle_percent > 0:
+            try:
+                update_card_price_by_crawler_id(card_id, deal_price, recycle_percent)
+            except Exception:
+                pass
+        if deal_price is not None and sell_percent > 0:
+            try:
+                update_product_price_by_crawler_id(card_id, deal_price, sell_percent)
+            except Exception:
+                pass
+
+        cond_txt = f"{deal_condition} {deal_format}" if deal_price is not None else "无有效价"
+        return jsonify({"success": True,
+                        "message": f"更新完成：{card_id} 现价 {cond_txt}（{len(eff)} 个成色有报价）"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ============================================================

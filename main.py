@@ -36,6 +36,7 @@ from scraper.search_api import (
     search_trading_cards,
     print_search_results,
     save_search_results,
+    fetch_product_detail,
 )
 
 
@@ -100,6 +101,17 @@ def main():
         parser.print_help()
         print("\n请指定运行模式：--test / --full / --resume / --check-updates / --diff / --update / --prices / --search")
         sys.exit(1)
+
+    # snkrdunk.com/en 旧站已下线：sitemap 批量发现模式不再可用，引导改用 --search / Web UI
+    if args.full or args.update or args.check_updates:
+        print("=" * 60)
+        print("[提示] snkrdunk.com/en 旧站已下线，sitemap 批量发现")
+        print("      (--full / --update / --check-updates) 已不再可用。")
+        print("请改用以下方式：")
+        print("  1. Web UI:  http://127.0.0.1:5000  → 「搜索」分页搜索并爬取")
+        print("  2. CLI:     python main.py --search '关键词'  (枚数固定为 1 枚)")
+        print("=" * 60)
+        sys.exit(0)
 
     paths = get_default_paths(args.output)
     scraper = CardScraper(delay=args.delay, output_dir=args.output)
@@ -397,8 +409,8 @@ def _run_search_mode(args, paths, scraper):
     print(f"搜索模式: {keyword}")
     print("=" * 60)
 
-    # 1. 调用搜索 API
-    print(f"\n[1/2] 搜索 API: {keyword}")
+    # 1. 调用搜索 API（新站 snkrdunk.com/search，枚数固定为 1 枚）
+    print(f"\n[1/2] 搜索: {keyword} (枚数=1枚)")
     results = search_trading_cards(
         keyword=keyword,
         max_results=args.max_matches,
@@ -435,15 +447,14 @@ def _run_search_mode(args, paths, scraper):
     ).strip().lower()
     if should_scrape == "y":
         print(f"\n[2/2] 爬取 {len(results)} 张卡片详情...")
-        # 构建 URL 列表
-        card_urls = [
-            f"https://snkrdunk.com/en/trading-cards/{r['id']}"
-            for r in results
-        ]
-        detailed = scraper.scrape_cards(
-            card_urls,
-            checkpoint_file=paths["checkpoint"],
-        )
+        detailed = []
+        for i, r in enumerate(results):
+            cid = r["id"]
+            print(f"  [{i+1}/{len(results)}] 爬取 {cid} ...")
+            data = fetch_product_detail(cid)
+            if data:
+                detailed.append(data)
+            time.sleep(0.5)
         if detailed:
             if args.format in ("json", "both"):
                 scraper.save_results(detailed, "trading_cards.json")
@@ -451,6 +462,8 @@ def _run_search_mode(args, paths, scraper):
                 scraper.save_csv(detailed, "trading_cards.csv")
             print_stats(detailed)
             print(f"\n详细数据已保存到 data/trading_cards.json")
+        else:
+            print("[INFO] 本次没有成功爬取到详情")
     else:
         print(f"\n搜索结果已保存到 {search_list_path}")
         print(f"  [HINT] 再次运行 --search '{keyword}' 并输入 y 可爬取详情")

@@ -157,7 +157,10 @@ body {
       <h1>SNKRDUNK 交易卡爬虫</h1>
       <p>搜索、浏览、爬取 SNKRDUNK 交易卡数据</p>
     </div>
-    <a href="/logout" style="color:rgba(255,255,255,.8);text-decoration:none;font-size:14px;padding:8px 16px;border:1px solid rgba(255,255,255,.3);border-radius:6px;transition:all .2s" onmouseover="this.style.background='rgba(255,255,255,.1)'" onmouseout="this.style.background='transparent'">退出登录</a>
+    <div style="display:flex;align-items:center;gap:14px">
+      <span id="fxLabel" style="font-size:12px;color:rgba(255,255,255,.85);background:rgba(0,0,0,.2);padding:4px 10px;border-radius:6px"></span>
+      <a href="/logout" style="color:rgba(255,255,255,.8);text-decoration:none;font-size:14px;padding:8px 16px;border:1px solid rgba(255,255,255,.3);border-radius:6px;transition:all .2s" onmouseover="this.style.background='rgba(255,255,255,.1)'" onmouseout="this.style.background='transparent'">退出登录</a>
+    </div>
   </div>
 </div>
 
@@ -183,6 +186,7 @@ body {
           <option value="200">200 条</option>
         </select>
         <button class="btn btn-primary" onclick="doSearch()">搜索</button>
+        <span class="text-muted" style="font-size:12px;align-self:center">枚数固定：1 枚</span>
       </div>
     </div>
 
@@ -205,9 +209,19 @@ body {
           </label>
         </div>
       </div>
+      <div style="color:var(--text-muted);font-size:11px;margin:-6px 0 8px;line-height:1.6">
+        注：成色价格显示为最新已售(1枚)。由于平台接口限制只返回最近约 20 笔成交，个别成色若一段时间没有成交，
+        会退回显示当前在售价。
+      </div>
       <div class="table-wrap"><table><thead>
-        <tr><th style="width:32px"></th><th>ID</th><th style="min-width:280px">名称</th><th>最低价</th></tr>
+        <tr><th style="width:32px"></th><th>ID</th><th style="min-width:280px">名称</th></tr>
       </thead><tbody id="searchTableBody"></tbody></table></div>
+    </div>
+    <div class="card" id="searchEmpty" style="display:none;width:100%;max-width:none">
+      <div style="text-align:center;color:var(--text-muted);padding:18px 0">
+        <div style="font-size:16px;margin-bottom:6px">没有找到符合条件的数据</div>
+        <div id="searchEmptyHint" style="font-size:13px"></div>
+      </div>
     </div>
   </div>
 
@@ -235,6 +249,17 @@ body {
   <div class="modal-content" onclick="event.stopPropagation()">
     <div class="modal-title" id="modalTitle"></div>
     <img id="modalImage" src="" alt="">
+  </div>
+</div>
+
+<!-- Confirm Modal（自製確認框，避免 IDE webview 對原生 confirm 支援不佳） -->
+<div id="confirmModal" class="modal" style="z-index:2000">
+  <div style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:24px 26px;max-width:420px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.55)" onclick="event.stopPropagation()">
+    <div style="font-size:15px;line-height:1.7;margin-bottom:20px;word-break:break-word" id="confirmMsg"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button type="button" class="btn" id="confirmCancel" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text)">取消</button>
+      <button type="button" class="btn btn-danger" id="confirmOk">確定</button>
+    </div>
   </div>
 </div>
 
@@ -329,14 +354,21 @@ async function doSearch() {
 
 function renderSearchResults(results) {
   const el = document.getElementById('searchResults');
+  const emptyEl = document.getElementById('searchEmpty');
   const tbody = document.getElementById('searchTableBody');
   const count = document.getElementById('resultCount');
 
   if (!results.length) {
     el.style.display = 'none';
+    if (emptyEl) {
+      const hint = document.getElementById('searchEmptyHint');
+      if (hint) hint.textContent = '请换其他关键词再试。（搜索固定枚数为 1 枚）';
+      emptyEl.style.display = 'block';
+    }
     return;
   }
 
+  if (emptyEl) emptyEl.style.display = 'none';
   el.style.display = 'block';
   count.textContent = `共 ${results.length} 张卡片`;
 
@@ -351,13 +383,12 @@ function renderSearchResults(results) {
                style="width:40px;height:56px;object-fit:cover;border-radius:4px;cursor:pointer"
                onclick="showImage('${r.thumbnail_url || ''}?size=l', '${escapeHtml(r.card_name||'').replace(/'/g, "\\'")}')"
                alt="">
-          <a href="https://snkrdunk.com/en/trading-cards/${r.id}" target="_blank" style="color:#818cf8;text-decoration:none">${escapeHtml(r.card_name||'')}</a>
+          <a href="https://snkrdunk.com/apparels/${r.id}" target="_blank" style="color:#818cf8;text-decoration:none">${escapeHtml(r.card_name||'')}</a>
         </div>
       </td>
-      <td><strong>$${r.min_price ?? '?'}</strong></td>
     </tr>
     <tr class="cond-row" data-card="${r.id}">
-      <td colspan="4">
+      <td colspan="3">
         <div class="cond-prices" id="cond-${r.id}" style="font-size:12px;line-height:1.8;">
           <span style="color:var(--text-muted)">加载中...</span>
         </div>
@@ -368,70 +399,153 @@ function renderSearchResults(results) {
   document.getElementById('selectAll').checked = false;
   updateCrawlBtn();
 
-  // 自动加载所有卡片的成色价格
-  results.forEach(r => loadConditionPrices(r.id));
+  // 自动加载所有卡片的详情与成色价格（分批并发加载，逐批渲染）
+  loadSearchDetails(results);
 }
 
 // ============================================================
-//  自动加载所有卡片的成色价格
+//  自动加载所有卡片的详情与成色价格
+//  内容来自 https://snkrdunk.com/apparels/{id} 详情页
 // ============================================================
-const condCache = {};  // card_id -> condition data
+const condCache = {};    // card_id -> {conditions, card_name, brand, product_code, image_url, ...}
+const cardCatalog = {};  // card_id -> productCatalogId（搜索 payload 的 productId，用于并行抓取）
+if (!window._searchSeq) window._searchSeq = 0;
+
+const GRADE_ORDER = ['A','B','C','D','PSA 10','PSA 9','PSA 8 or under',
+                     'BGS 10 BL','BGS 10 GL','BGS 9.5','BGS 9 or under',
+                     'ARS 10+','ARS 10','ARS 9','ARS 8 or under','Other'];
+
+// 分批并发加载搜索结果里所有卡片的详情（每批服务端并发抓取，逐批渲染）
+async function loadSearchDetails(results) {
+  const seq = ++window._searchSeq;
+  const countEl = document.getElementById('resultCount');
+  const CHUNK = 10;
+
+  // 记录 catalog_id（已知则让后端并行抓详情页与交易履历）
+  results.forEach(r => {
+    if (r.catalog_id) cardCatalog[r.id] = r.catalog_id;
+    if (condCache[r.id]) renderConditionDetail(r.id, condCache[r.id]);  // 命中缓存直接渲染
+  });
+  const pending = results.filter(r => !condCache[r.id]);
+  if (!pending.length) return;
+
+  for (let i = 0; i < pending.length; i += CHUNK) {
+    if (window._searchSeq !== seq) return;  // 已有新一轮搜索，丢弃旧请求
+    const chunk = pending.slice(i, i + CHUNK);
+    if (countEl) countEl.textContent = `共 ${results.length} 张卡片 · 详情 ${Math.min(i + CHUNK, pending.length)}/${pending.length}`;
+    const items = chunk.map(r => ({ id: r.id, catalog_id: cardCatalog[r.id] || r.catalog_id || '' }));
+    try {
+      const res = await fetch('/api/search-details', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({items}),
+      });
+      const data = await res.json();
+      if (window._searchSeq !== seq) return;
+      chunk.forEach(r => {
+        const d = data && data.details && data.details[r.id];
+        if (d) {
+          condCache[r.id] = d;
+          renderConditionDetail(r.id, d);
+        }
+      });
+    } catch(e) {
+      if (window._searchSeq !== seq) return;
+      chunk.forEach(r => {
+        const box = document.getElementById(`cond-${r.id}`);
+        if (box && !condCache[r.id]) box.innerHTML = '<span style="color:#ef4444">详情获取超时</span>';
+      });
+    }
+  }
+  if (window._searchSeq === seq && countEl) countEl.textContent = `共 ${results.length} 张卡片`;
+}
 
 async function loadConditionPrices(cardId) {
   if (condCache[cardId]) {
-    renderConditionCheckboxes(cardId, condCache[cardId]);
+    renderConditionDetail(cardId, condCache[cardId]);
     return;
   }
 
+  const box = document.getElementById(`cond-${cardId}`);
+  if (!box) return;
+
   try {
-    const res = await fetch(`/api/conditions/${cardId}`, { timeout: 30000 });
+    const cat = cardCatalog[cardId] ? `?catalog=${cardCatalog[cardId]}` : '';
+    const res = await fetch(`/api/conditions/${cardId}${cat}`, { timeout: 30000 });
     const data = await res.json();
     if (data.error) {
-      document.getElementById(`cond-${cardId}`).innerHTML = `<span style="color:#ef4444">获取失败</span>`;
+      box.innerHTML = `<span style="color:#ef4444">详情获取失败: ${escapeHtml(data.error)}</span>`;
       return;
     }
-    condCache[cardId] = data.conditions || {};
-    renderConditionCheckboxes(cardId, condCache[cardId]);
+    condCache[cardId] = data;
+    renderConditionDetail(cardId, data);
   } catch(e) {
-    document.getElementById(`cond-${cardId}`).innerHTML = `<span style="color:#ef4444">超时</span>`;
+    box.innerHTML = `<span style="color:#ef4444">详情获取超时</span>`;
   }
 }
 
-function renderConditionCheckboxes(cardId, conditions) {
+function renderConditionDetail(cardId, d) {
   const container = document.getElementById(`cond-${cardId}`);
   if (!container) return;
 
-  const grades = ['A','B','C','D','PSA 10','PSA 9','PSA 8 or under','BGS 10 BL','BGS 10 GL'];
-
-  // 初始化 selectedGrade（已选成色）
+  const conditions = d.conditions || {};
   if (!window._condSelections) window._condSelections = {};
-  if (!window._condSelections[cardId]) window._condSelections[cardId] = null;
+  const selected = window._condSelections[cardId] || null;
 
-  const selected = window._condSelections[cardId];
+  const metaParts = [];
+  if (d.brand) metaParts.push(d.brand);
+  if (d.product_code) metaParts.push(`品番: ${d.product_code}`);
+  if (d.listing_count != null) metaParts.push(`在售 ${d.listing_count} 件`);
+  const meta = metaParts.join(' · ');
 
-  const html = grades.map(g => {
-    const c = conditions[g] || {};
-    const price = c.price != null ? `$${c.price.toFixed(2)}` : '$0';
+  // 成色框顶部只显示一行「品牌 · 品番 · 在售 N 件」，下面直接是各成色
+  const header = meta
+    ? `<div style="color:var(--text-muted);font-size:12px;margin-bottom:4px">${escapeHtml(meta)}</div>`
+    : '';
+
+  const chips = GRADE_ORDER.map(g => {
+    const c = conditions[g];
+    if (!c) return '';
+    const has = c.has_listing && c.price != null;      // 当前是否在库（决定能否爬取）
+    const soldOk = c.sold_price != null;               // 是否有最新已售记录
+    // 价格优先显示「最新已售」；无已售记录时退回显示当前在售价
+    const price = soldOk ? fmtHKD(c.sold_price) : (has ? fmtHKD(c.price) : '-');
     const isChecked = selected === g;
+    let style = 'display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin:3px 6px 3px 0;padding:3px 8px;border-radius:6px;border:1px solid var(--border);font-size:12px;';
+    if (isChecked) style += 'background:var(--primary);color:#fff;border-color:var(--primary)';
+    else if (!has) style += 'opacity:.55;background:var(--bg-input);color:var(--text-muted);cursor:not-allowed';
+    else style += 'background:var(--bg-input);color:var(--text)';
 
-    return `<label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;margin-right:8px;padding:2px 6px;border-radius:4px;${isChecked ? 'background:var(--primary);color:#fff' : 'background:var(--bg-input);color:var(--text)'}">
+    const stockText = has ? '在售' : '缺货';
+    const dateText = soldOk ? fmtSoldDate(c.sold_at) : '';
+    const tip = `${g}${soldOk ? ' · 最新已售 ' + fmtSoldFull(c.sold_at) : (has ? ' · 暂无已售记录，显示当前在售价' : ' · 缺货')}`;
+    return `<label style="${style}" title="${escapeHtml(tip)}">
       <input type="radio" name="cond-${cardId}" value="${g}"
              ${isChecked ? 'checked' : ''}
+             ${has ? '' : 'disabled'}
              onchange="selectCondition('${cardId}', '${g}')"
-             style="margin:0">
-      <span style="font-weight:${isChecked?'600':'400'}">${g}</span>
-      <span style="opacity:0.7">${price}</span>
+             style="display:none">
+      <span style="font-weight:600">${g}</span>
+      <span>${price}</span>
+      ${soldOk
+        ? `<span style="font-size:10px;opacity:.8">已售${dateText}</span>`
+        : `<span style="font-size:11px;opacity:.75">${stockText}</span>`}
     </label>`;
   }).join('');
 
-  container.innerHTML = html;
+  container.innerHTML = header + (chips || '<span style="color:var(--text-muted)">页面上无在售状态</span>');
 }
 
 function selectCondition(cardId, grade) {
   if (!window._condSelections) window._condSelections = {};
   window._condSelections[cardId] = grade;
-  // 重新渲染所有 label 样式
-  renderConditionCheckboxes(cardId, condCache[cardId] || {});
+  // 直接点击成色(状态)时，默认同时勾选这张卡牌，方便直接“爬取选中”
+  const cb = document.querySelector(`.card-check[value="${cardId}"]`);
+  if (cb && !cb.checked) {
+    cb.checked = true;
+    updateCrawlBtn();
+  }
+  renderConditionDetail(cardId, condCache[cardId] || {});
 }
 
 // ============================================================
@@ -446,7 +560,7 @@ async function crawlSelected() {
   ids.forEach(cid => {
     if (condCache[cid]) {
       conditions[cid] = {
-        all_prices: condCache[cid],  // 所有成色价格
+        all_prices: condCache[cid].conditions || {},  // 所有成色价格
         selected: window._condSelections && window._condSelections[cid] || null,  // 选中的等级
       };
     }
@@ -565,12 +679,12 @@ function filterData() {
                data-img="${escapeHtml(c.thumbnail_url || '')}" data-title="${escapeHtml(c.card_name||'')}"
                onclick="if(this.dataset.img) showImage(this.dataset.img, this.dataset.title)"
                alt="">
-          <a href="https://snkrdunk.com/en/trading-cards/${c.id}" target="_blank" style="color:#818cf8;text-decoration:none;font-size:15px">${escapeHtml(c.card_name||'')}</a>
+          <a href="https://snkrdunk.com/apparels/${c.id}" target="_blank" style="color:#818cf8;text-decoration:none;font-size:15px">${escapeHtml(c.card_name||'')}</a>
         </div>
       </td>
       <td style="font-size:14px">${escapeHtml(c.brand||'')}</td>
       <td style="font-size:15px">${c.deal_condition ? `<strong>${escapeHtml(c.deal_condition)}</strong>` : '-'}</td>
-      <td style="font-size:16px"><strong>${c.deal_price != null ? (c.deal_format || '$' + c.deal_price.toFixed(2)) : ('$' + (c.min_price ?? '?'))}</strong></td>
+      <td style="font-size:16px"><strong>${c.deal_price != null ? fmtHKD(c.deal_price) : fmtHKD(c.min_price)}</strong></td>
       <td><button class="btn btn-danger btn-sm" onclick="deleteCard('${c.id}')" style="padding:6px 12px;font-size:12px">删除</button></td>
     </tr>
   `).join('');
@@ -597,14 +711,14 @@ function toggleDataAll() {
 }
 
 async function deleteCard(id) {
-  if (!confirm(`确定要删除 ID=${id} 的卡片吗？`)) return;
+  if (!(await askConfirm(`确定要删除 ID=${id} 的卡片吗？`))) return;
   await _doDelete([id]);
 }
 
 async function batchDelete() {
   const ids = Array.from(document.querySelectorAll('.data-check:checked')).map(cb => cb.value);
   if (!ids.length) return;
-  if (!confirm(`确定要删除选中的 ${ids.length} 张卡片吗？`)) return;
+  if (!(await askConfirm(`确定要删除选中的 ${ids.length} 张卡片吗？`))) return;
   await _doDelete(ids);
 }
 
@@ -631,7 +745,7 @@ async function _doDelete(ids) {
 async function importToMySQL() {
   const ids = Array.from(document.querySelectorAll('.data-check:checked')).map(cb => cb.value);
   if (!ids.length) return toast('请先选择要导入的卡片', 'error');
-  if (!confirm(`确定要导入选中的 ${ids.length} 张卡片到 MySQL 吗？`)) return;
+  if (!(await askConfirm(`确定要导入选中的 ${ids.length} 张卡片到 MySQL 吗？`))) return;
 
   const btn = document.getElementById('importBtn');
   btn.disabled = true;
@@ -732,7 +846,7 @@ function filterStats() {
             <td style="max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px" title="${escapeHtml(c.card_brand||'')}">${escapeHtml(c.card_brand||'')}</td>
             <td style="font-size:14px">${escapeHtml(c.card_type||'-')}</td>
             <td style="font-size:15px">${c.deal_condition ? `<strong>${escapeHtml(c.deal_condition)}</strong>` : '-'}</td>
-            <td style="font-size:16px"><strong>${c.deal_price != null ? '$' + c.deal_price.toFixed(2) : '-'}</strong></td>
+            <td style="font-size:16px"><strong>${c.deal_price != null ? fmtHKD(c.deal_price) : '-'}</strong></td>
             <td class="text-muted" style="font-size:12px">${c.updated_at ? c.updated_at.slice(0,19).replace('T',' ') : (c.created_at ? c.created_at.slice(0,19).replace('T',' ') : '')}</td>
             <td style="text-align:center">
               <label class="switch-wrap">
@@ -740,7 +854,10 @@ function filterStats() {
                 <span class="switch-slider"></span>
               </label>
             </td>
-            <td><button class="btn btn-danger btn-sm" onclick="statsDeleteCard(${c.row_id}, this)" style="padding:4px 8px;font-size:11px">删除</button></td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-primary btn-sm" onclick="statsUpdateCard('${escapeHtml(c.id)}', this)" title="手动爬取最新价格并更新" style="padding:4px 8px;font-size:11px;margin-right:6px">手动更新</button>
+              <button class="btn btn-danger btn-sm" onclick="statsDeleteCard(${c.row_id}, this)" style="padding:4px 8px;font-size:11px">删除</button>
+            </td>
           </tr>
         `).join('')}</tbody>
       </table></div>`;
@@ -756,7 +873,7 @@ function filterStats() {
       <div class="table-wrap"><table style="font-size:14px">
         <thead><tr><th style="font-size:14px">ID</th><th style="font-size:14px">名称</th><th style="font-size:14px">最低价</th></tr></thead>
         <tbody>${filteredNotImported.map(c => `
-          <tr style="font-size:15px"><td class="text-muted" style="font-size:13px">${escapeHtml(c.id)}</td><td>${escapeHtml(c.name)}</td><td style="font-size:16px"><strong>${c.price != null ? '$' + c.price : '-'}</strong></td></tr>
+          <tr style="font-size:15px"><td class="text-muted" style="font-size:13px">${escapeHtml(c.id)}</td><td>${escapeHtml(c.name)}</td><td style="font-size:16px"><strong>${fmtHKD(c.price)}</strong></td></tr>
         `).join('')}</tbody>
       </table></div>`;
   } else {
@@ -818,8 +935,34 @@ async function runAutoUpdateNow() {
   btn.textContent = '🔄 手动更新';
 }
 
+async function statsUpdateCard(cardId, btn) {
+  if (!(await askConfirm(`确定手动爬取并更新 ID=${cardId} 的最新价格吗？`))) return;
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '更新中...';
+  try {
+    const res = await fetch('/api/stats/update-card', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({card_id: cardId}),
+    });
+    const data = await res.json();
+    if (data.success) {
+      toast(data.message || '更新成功', 'success');
+    } else {
+      toast(data.error || data.message || '更新失败', 'error');
+    }
+  } catch(e) {
+    toast('更新失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
+    loadStats();
+  }
+}
+
 async function statsDeleteCard(rowId, btn) {
-  if (!confirm(`确定从数据库删除 ID=${rowId} 的卡牌吗？`)) return;
+  if (!(await askConfirm(`确定从数据库删除 ID=${rowId} 的卡牌吗？`))) return;
   btn.disabled = true;
   btn.textContent = '...';
   try {
@@ -834,12 +977,12 @@ async function statsDeleteCard(rowId, btn) {
       if (tr) tr.remove();
       loadStats();
     } else {
-      alert('删除失败: ' + (data.message || data.error || '未知错误'));
+      toast('删除失败: ' + (data.message || data.error || '未知错误'), 'error');
       btn.disabled = false;
       btn.textContent = '删除';
     }
   } catch(e) {
-    alert('删除失败: ' + e.message);
+    toast('删除失败: ' + e.message, 'error');
     btn.disabled = false;
     btn.textContent = '删除';
   }
@@ -854,11 +997,69 @@ async function toggleCardUpdate(cardId, enabled) {
     });
     const data = await res.json();
     if (!data.success) {
-      alert('切换失败: ' + (data.message || data.error || '未知错误'));
+      toast('切换失败: ' + (data.message || data.error || '未知错误'), 'error');
     }
   } catch(e) {
-    alert('切换失败: ' + e.message);
+    toast('切换失败: ' + e.message, 'error');
   }
+}
+
+// ============================================================
+//  汇率(JPY→HKD，存入資料庫) + 搜索筛选项
+// ============================================================
+let FX_RATE = null;      // 1 JPY = ? HKD（僅顯示用，價格已由後端換算為港幣）
+let FX_RATE_TIME = '';
+
+async function loadRate() {
+  try {
+    const res = await fetch('/api/rate');
+    const d = await res.json();
+    if (d && d.success) {
+      FX_RATE = d.rate;
+      FX_RATE_TIME = d.fetched_at || '';
+    }
+  } catch(e) {}
+  renderFx();
+}
+
+function renderFx() {
+  const el = document.getElementById('fxLabel');
+  if (!el) return;
+  if (FX_RATE) {
+    const t = FX_RATE_TIME ? `（更新：${FX_RATE_TIME}）` : '';
+    el.textContent = `JPY→HKD: 1 JPY = HK$${Number(FX_RATE).toFixed(5)}${t}`;
+    el.title = '抓取到的價格會以最新匯率換算成港幣並存入資料庫；取得失敗時使用資料庫最新匯率';
+  } else {
+    el.textContent = '匯率取得失敗（無法換算港幣）';
+  }
+  // 重新渲染已展示的数据
+  if (window._statsImportedData !== undefined) filterStats();
+  if (searchResults && searchResults.length) renderSearchResults(searchResults);
+}
+
+// 直接格式化「已換算好的港币金额」（後端已把日元換算為港幣）
+function fmtHKD(v) {
+  if (v === null || v === undefined || v === '' || isNaN(Number(v))) return '-';
+  const n = Number(v);
+  return 'HK$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+// 后端返回的已售时间（ISO UTC），换算本地时区
+function toLocalDate(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+function fmtSoldDate(s) {
+  const d = toLocalDate(s);
+  if (!d) return '';
+  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+}
+function fmtSoldFull(s) {
+  const d = toLocalDate(s);
+  if (!d) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 // ============================================================
@@ -883,8 +1084,40 @@ function showImage(url, title) {
 function closeImage() {
   document.getElementById('imageModal').classList.remove('active');
 }
+
+// 自製確認框（回傳 Promise<boolean>，避免使用原生 window.confirm）
+function askConfirm(message) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('confirmModal');
+    const msgEl = document.getElementById('confirmMsg');
+    const okBtn = document.getElementById('confirmOk');
+    const cancelBtn = document.getElementById('confirmCancel');
+    msgEl.textContent = message;
+    const done = (val) => {
+      modal.classList.remove('active');
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+      modal.onclick = null;
+      resolve(val);
+    };
+    okBtn.onclick = () => done(true);
+    cancelBtn.onclick = () => done(false);
+    modal.onclick = (e) => { if (e.target === modal) done(false); };
+    modal.classList.add('active');
+    okBtn.focus();
+  });
+}
+
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeImage();
+  if (e.key === 'Escape') {
+    const cm = document.getElementById('confirmModal');
+    if (cm && cm.classList.contains('active')) {
+      const cb = document.getElementById('confirmCancel');
+      if (cb) cb.click();
+      return;
+    }
+    closeImage();
+  }
 });
 
 function toast(msg, type = 'success') {
@@ -903,6 +1136,7 @@ function updateCrawlBtn() {
 // 自动加载数据
 loadData();
 loadStats();
+loadRate();
 </script>
 </body>
 </html>
