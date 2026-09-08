@@ -337,18 +337,22 @@ def get_card_sell_percent() -> int:
 
 def update_card_price_by_crawler_id(crawler_id: str, deal_price: float, recycle_percent: int) -> bool:
     """
-    根据 crawler_id 更新 card 表中所有匹配记录的 card_price。
-    card_price = deal_price * recycle_percent / 100
+    根据 crawler_id 更新 card 表中所有匹配记录（更新价格时同步）：
+      card_price   = 基准价(deal_price) × 回收百分比 / 100
+      card_recycle = 基准价 × 回收百分比 / 100（与 card_price 相同）
+      card_cost    = 基准价(deal_price)
     """
     if deal_price is None or recycle_percent <= 0:
         return False
     card_price = deal_price * recycle_percent / 100
+    base = round(float(deal_price), 2)
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "UPDATE `card` SET `card_price` = %s WHERE `crawler_id` = %s",
-                (round(card_price, 2), crawler_id)
+                "UPDATE `card` SET `card_price` = %s, `card_recycle` = %s, "
+                "`card_cost` = %s, `updated_at` = NOW() WHERE `crawler_id` = %s",
+                (round(card_price, 2), round(card_price, 2), base, crawler_id)
             )
             conn.commit()
             return cursor.rowcount > 0
