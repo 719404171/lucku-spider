@@ -159,6 +159,7 @@ body {
     </div>
     <div style="display:flex;align-items:center;gap:14px">
       <span id="fxLabel" style="font-size:12px;color:rgba(255,255,255,.85);background:rgba(0,0,0,.2);padding:4px 10px;border-radius:6px"></span>
+      <button onclick="restartService()" style="color:rgba(255,255,255,.9);background:rgba(239,68,68,.6);text-decoration:none;font-size:13px;padding:8px 14px;border:1px solid rgba(255,255,255,.3);border-radius:6px;cursor:pointer;transition:all .2s;font-weight:600" onmouseover="this.style.background='rgba(239,68,68,.85)'" onmouseout="this.style.background='rgba(239,68,68,.6)'">🔄 重启服务</button>
       <a href="/logout" style="color:rgba(255,255,255,.8);text-decoration:none;font-size:14px;padding:8px 16px;border:1px solid rgba(255,255,255,.3);border-radius:6px;transition:all .2s" onmouseover="this.style.background='rgba(255,255,255,.1)'" onmouseout="this.style.background='transparent'">退出登录</a>
     </div>
   </div>
@@ -1131,6 +1132,27 @@ function toast(msg, type = 'success') {
 function updateCrawlBtn() {
   const checked = document.querySelectorAll('.card-check:checked').length;
   document.getElementById('crawlBtn').textContent = `爬取选中 (${checked})`;
+}
+
+// ============================================================
+//  远程重启服务
+// ============================================================
+async function restartService() {
+  if (!(await askConfirm('确定要重启服务吗？重启期间页面会短暂不可访问（约 3-5 秒）。'))) return;
+
+  try {
+    const res = await fetch('/api/restart', {method: 'POST'});
+    const data = await res.json();
+    if (data.success) {
+      toast('🔄 ' + data.message, 'success');
+      // 3 秒后自动刷新页面
+      setTimeout(() => location.reload(), 3000);
+    } else {
+      toast(data.error || '重启失败', 'error');
+    }
+  } catch(e) {
+    toast('重启请求失败: ' + e.message, 'error');
+  }
 }
 
 // 自动加载数据

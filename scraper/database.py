@@ -13,11 +13,11 @@ import pymysql
 
 # 数据库配置（优先从环境变量读取）
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "8.210.90.110"),
+    "host": os.getenv("DB_HOST", "rm-3ns4xjj7c1qu4q1t35o.mysql.cnhk.rds.aliyuncs.com"),
     "port": int(os.getenv("DB_PORT", "3306")),
-    "database": os.getenv("DB_DATABASE", "lucku"),
-    "user": os.getenv("DB_USERNAME", "lucku"),
-    "password": os.getenv("DB_PASSWORD", "lucku"),
+    "database": os.getenv("DB_DATABASE", "luckutcgb0f140d7"),
+    "user": os.getenv("DB_USERNAME", "luckutcgvdvtr2g3"),
+    "password": os.getenv("DB_PASSWORD", "Luckutcgbd@5869c7"),
     "charset": "utf8mb4",
 }
 

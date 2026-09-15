@@ -5,6 +5,7 @@ SNKRDUNK Trading Card Web UI - Flask 后端
 import functools
 import json
 import os
+import subprocess
 import sys
 import time
 import threading
@@ -329,7 +330,7 @@ def api_import_mysql():
         err_msg = str(e)
         # 区分 MySQL 连接错误和其他错误
         if "Can't connect" in err_msg or "Connection refused" in err_msg or "Timeout" in err_msg:
-            return jsonify({"error": f"无法连接 MySQL 服务器 (8.210.90.110:3306)，请检查网络和防火墙。错误: {e}"}), 500
+            return jsonify({"error": f"无法连接 MySQL 服务器，请检查网络和防火墙。错误: {e}"}), 500
         return jsonify({"error": f"导入失败: {e}"}), 500
 
 
@@ -957,6 +958,31 @@ def api_stats_update_card():
                         "message": f"更新完成：{card_id} 现价 {cond_txt}（{len(eff)} 个成色有报价）"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+#  远程重启（给 systemd 服务用，延迟 1 秒执行让 HTTP 响应先返回）
+# ============================================================
+
+@app.route("/api/restart", methods=["POST"])
+@api_login_required
+def api_restart():
+    """一键重启服务（systemd restart spidercard）"""
+    service_name = os.getenv("SERVICE_NAME", "spidercard")
+
+    def _do_restart():
+        time.sleep(1)  # 等当前 HTTP 响应返回
+        try:
+            subprocess.run(
+                ["systemctl", "restart", service_name],
+                check=False,
+                capture_output=True,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=_do_restart, daemon=True).start()
+    return jsonify({"success": True, "message": "服务即将重启，稍候 3-5 秒后自动刷新..."})
 
 
 # ============================================================
