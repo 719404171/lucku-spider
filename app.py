@@ -30,14 +30,44 @@ except ImportError:
     print("[WARN] pymysql 未安装，MySQL 导入功能不可用。pip install pymysql")
 
 app = Flask(__name__)
-app.secret_key = "snkrdunk-secret-key-change-in-production"
-
-# 默认登录账号 / 密码
-AUTH_USER = "admin"
-AUTH_PASS = "admin"
+app.secret_key = "a3f8b2c1d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6"
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# ============================================================
+#  认证配置（存 data/auth.json，可网页修改）
+# ============================================================
+AUTH_FILE = os.path.join(DATA_DIR, "auth.json")
+
+DEFAULT_AUTH = {"username": "admin", "password": "zjihifRfiS6IJ5nR"}
+
+def load_auth() -> dict:
+    """从 auth.json 读取账号密码，不存在则用默认值并创建文件"""
+    if not os.path.exists(AUTH_FILE):
+        save_auth(DEFAULT_AUTH)
+        return dict(DEFAULT_AUTH)
+    try:
+        with open(AUTH_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        # 兼容旧字段名
+        if "username" not in cfg:
+            cfg["username"] = DEFAULT_AUTH["username"]
+        if "password" not in cfg:
+            cfg["password"] = DEFAULT_AUTH["password"]
+        return cfg
+    except Exception:
+        return dict(DEFAULT_AUTH)
+
+def save_auth(cfg: dict):
+    """保存账号密码到 auth.json"""
+    with open(AUTH_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+def get_auth() -> tuple:
+    """返回 (username, password)"""
+    cfg = load_auth()
+    return cfg["username"], cfg["password"]
 
 # 全局状态
 crawl_status = {"running": False, "progress": "", "total": 0, "done": 0, "match": 0}
@@ -104,6 +134,7 @@ def login_page():
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
+        AUTH_USER, AUTH_PASS = get_auth()
         if username == AUTH_USER and password == AUTH_PASS:
             session["logged_in"] = True
             session["username"] = username
@@ -958,6 +989,34 @@ def api_stats_update_card():
                         "message": f"更新完成：{card_id} 现价 {cond_txt}（{len(eff)} 个成色有报价）"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+#  修改登录密码（需先验证旧密码）
+# ============================================================
+
+@app.route("/api/change-password", methods=["POST"])
+@api_login_required
+def api_change_password():
+    """修改账号密码：提交旧密码 + 新密码"""
+    data = request.get_json() or {}
+    old_pass = data.get("old_password", "")
+    new_pass = data.get("new_password", "")
+
+    if not old_pass or not new_pass:
+        return jsonify({"error": "请填写旧密码和新密码"}), 400
+    if len(new_pass) < 6:
+        return jsonify({"error": "新密码至少 6 位"}), 400
+    if len(new_pass) > 100:
+        return jsonify({"error": "新密码过长"}), 400
+
+    cfg = load_auth()
+    if cfg["password"] != old_pass:
+        return jsonify({"error": "旧密码不正确"}), 401
+
+    cfg["password"] = new_pass
+    save_auth(cfg)
+    return jsonify({"success": True, "message": "密码修改成功，下次登录生效"})
 
 
 # ============================================================

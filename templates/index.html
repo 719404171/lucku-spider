@@ -159,6 +159,7 @@ body {
     </div>
     <div style="display:flex;align-items:center;gap:14px">
       <span id="fxLabel" style="font-size:12px;color:rgba(255,255,255,.85);background:rgba(0,0,0,.2);padding:4px 10px;border-radius:6px"></span>
+      <button onclick="showChangePwd()" style="color:rgba(255,255,255,.9);background:rgba(99,102,241,.6);text-decoration:none;font-size:13px;padding:8px 14px;border:1px solid rgba(255,255,255,.3);border-radius:6px;cursor:pointer;transition:all .2s;font-weight:600" onmouseover="this.style.background='rgba(99,102,241,.85)'" onmouseout="this.style.background='rgba(99,102,241,.6)'">🔑 修改密码</button>
       <button onclick="restartService()" style="color:rgba(255,255,255,.9);background:rgba(239,68,68,.6);text-decoration:none;font-size:13px;padding:8px 14px;border:1px solid rgba(255,255,255,.3);border-radius:6px;cursor:pointer;transition:all .2s;font-weight:600" onmouseover="this.style.background='rgba(239,68,68,.85)'" onmouseout="this.style.background='rgba(239,68,68,.6)'">🔄 重启服务</button>
       <a href="/logout" style="color:rgba(255,255,255,.8);text-decoration:none;font-size:14px;padding:8px 16px;border:1px solid rgba(255,255,255,.3);border-radius:6px;transition:all .2s" onmouseover="this.style.background='rgba(255,255,255,.1)'" onmouseout="this.style.background='transparent'">退出登录</a>
     </div>
@@ -260,6 +261,30 @@ body {
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button type="button" class="btn" id="confirmCancel" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text)">取消</button>
       <button type="button" class="btn btn-danger" id="confirmOk">確定</button>
+    </div>
+  </div>
+</div>
+
+<!-- Change Password Modal -->
+<div id="changePwdModal" class="modal" style="z-index:2000">
+  <div style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:28px 30px;max-width:420px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.55)" onclick="event.stopPropagation()">
+    <div style="font-size:18px;font-weight:700;margin-bottom:20px">🔑 修改密码</div>
+    <div id="changePwdError" style="color:var(--danger);font-size:13px;margin-bottom:10px;display:none"></div>
+    <div style="margin-bottom:14px">
+      <label style="font-size:13px;color:var(--text-muted);display:block;margin-bottom:6px">当前密码</label>
+      <input type="password" id="cpOld" placeholder="输入当前密码" style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-input);color:var(--text);font-size:14px" onkeydown="if(event.key==='Enter') doChangePwd()">
+    </div>
+    <div style="margin-bottom:14px">
+      <label style="font-size:13px;color:var(--text-muted);display:block;margin-bottom:6px">新密码（至少 6 位）</label>
+      <input type="password" id="cpNew" placeholder="输入新密码" style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-input);color:var(--text);font-size:14px" onkeydown="if(event.key==='Enter') doChangePwd()">
+    </div>
+    <div style="margin-bottom:20px">
+      <label style="font-size:13px;color:var(--text-muted);display:block;margin-bottom:6px">确认新密码</label>
+      <input type="password" id="cpNew2" placeholder="再输一次新密码" style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-input);color:var(--text);font-size:14px" onkeydown="if(event.key==='Enter') doChangePwd()">
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button type="button" class="btn" onclick="hideChangePwd()" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text)">取消</button>
+      <button type="button" class="btn btn-primary" id="cpSubmitBtn" onclick="doChangePwd()">确认修改</button>
     </div>
   </div>
 </div>
@@ -1132,6 +1157,59 @@ function toast(msg, type = 'success') {
 function updateCrawlBtn() {
   const checked = document.querySelectorAll('.card-check:checked').length;
   document.getElementById('crawlBtn').textContent = `爬取选中 (${checked})`;
+}
+
+// ============================================================
+//  修改密码弹窗
+// ============================================================
+function showChangePwd() {
+  document.getElementById('cpOld').value = '';
+  document.getElementById('cpNew').value = '';
+  document.getElementById('cpNew2').value = '';
+  document.getElementById('changePwdError').style.display = 'none';
+  document.getElementById('changePwdModal').classList.add('active');
+  setTimeout(() => document.getElementById('cpOld').focus(), 50);
+}
+function hideChangePwd() {
+  document.getElementById('changePwdModal').classList.remove('active');
+}
+async function doChangePwd() {
+  const oldV = document.getElementById('cpOld').value;
+  const newV = document.getElementById('cpNew').value;
+  const new2 = document.getElementById('cpNew2').value;
+  const errEl = document.getElementById('changePwdError');
+  const btn = document.getElementById('cpSubmitBtn');
+
+  errEl.style.display = 'none';
+
+  if (!oldV || !newV || !new2) { errEl.textContent = '请填写所有字段'; errEl.style.display = 'block'; return; }
+  if (newV.length < 6) { errEl.textContent = '新密码至少 6 位'; errEl.style.display = 'block'; return; }
+  if (newV !== new2) { errEl.textContent = '两次输入的新密码不一致'; errEl.style.display = 'block'; return; }
+  if (oldV === newV) { errEl.textContent = '新密码不能和旧密码相同'; errEl.style.display = 'block'; return; }
+
+  btn.disabled = true; btn.textContent = '提交中...';
+  try {
+    const res = await fetch('/api/change-password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({old_password: oldV, new_password: newV}),
+    });
+    const data = await res.json();
+    if (data.success) {
+      hideChangePwd();
+      toast('✅ ' + data.message, 'success');
+      // 修改密码后退出登录，强制用新密码登录
+      setTimeout(() => { location.href = '/logout'; }, 1500);
+    } else {
+      errEl.textContent = data.error || '修改失败';
+      errEl.style.display = 'block';
+    }
+  } catch(e) {
+    errEl.textContent = '请求失败: ' + e.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = '确认修改';
+  }
 }
 
 // ============================================================
