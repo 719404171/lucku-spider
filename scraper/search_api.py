@@ -34,6 +34,11 @@ BASE_URL = "https://snkrdunk.com"
 SEARCH_URL = f"{BASE_URL}/search"
 DETAIL_URL = f"{BASE_URL}/apparels/{{id}}"
 USED_LISTINGS_URL = f"{BASE_URL}/v1/apparels/{{product_id}}/used"
+
+# 搜索分类（searchCategoryIds，来源 /v3/search/filter -> apparelCategories）：
+#   6/33 トレカ (シングルカード) 卡牌；6/26 トレカ (ボックス・パック) 卡包
+SEARCH_CATEGORY_SINGLE = "6/33"
+SEARCH_CATEGORY_BOX_PACK = "6/26"
 # 交易履历 API（v3）：商品需用 productCatalogId（非 apparels id），
 # variant_id 代表「枚数」；不带 variant_id 时默认回传 1枚 的交易与 filters.variants.options
 TRADING_HISTORY_URL = f"{BASE_URL}/v3/products/{{product_id}}/trading-history"
@@ -93,6 +98,8 @@ SIZE_OPTIONS: List[Dict[str, str]] = [
 
 # 详情页 chips 的文本 → 规范化等级（与旧站/数据库使用的等级命名保持一致）
 GRADE_NORMALIZE = {
+    "新品S": "S",
+    "新品": "S",
     "PSA10": "PSA 10",
     "PSA9": "PSA 9",
     "PSA8以下": "PSA 8 or under",
@@ -223,6 +230,19 @@ def _parse_product_summary(html: str) -> Dict:
         return {}
     brands = obj.get("brands") or []
     media = obj.get("primaryMedia") or {}
+
+    def _first_positive(*vals):
+        for v in vals:
+            try:
+                if v is not None and float(v) > 0:
+                    return v
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    # 卡包（box/pack）详情页没有成色 chips，其最低售价直接在摘要对象上：
+    #   minPrice / minPriceOfNewListing = 新品最低在售（日元）
+    #   usedMinPrice = 中古最低在售；regularPrice = 定价
     return {
         "catalog_id": obj.get("productCatalogId"),
         "product_code": str(obj.get("productNumber", "") or ""),
@@ -232,6 +252,11 @@ def _parse_product_summary(html: str) -> Dict:
         "image_url": str(media.get("imageUrl", "") or ""),
         "listing_count": obj.get("usedListingCount"),
         "sale_count_text": str(obj.get("usedListingCountText", "") or ""),
+        "all_listing_count": obj.get("listingCount"),
+        "all_listing_count_text": str(obj.get("listingCountText", "") or ""),
+        "min_price_jpy": _first_positive(obj.get("minPriceOfNewListing"), obj.get("minPrice")),
+        "used_min_price_jpy": _first_positive(obj.get("usedMinPrice")),
+        "regular_price_jpy": _first_positive(obj.get("regularPrice")),
     }
 
 
@@ -244,11 +269,26 @@ def _product_id_from_link(link: str) -> str:
     return m.group(1) if m else ""
 
 
+def _detect_product_type(p: Dict) -> str:
+    """根据搜索 payload 的 supershipLog.categoryId 判断卡牌/卡包。
+    6/33=シングルカード，6/26=ボックス・パック；缺失时按标题关键词兜底。"""
+    cat = str((p.get("supershipLog") or {}).get("categoryId") or "").strip()
+    if cat == SEARCH_CATEGORY_BOX_PACK:
+        return "box_pack"
+    if cat == SEARCH_CATEGORY_SINGLE:
+        return "single"
+    title = str(p.get("title", "") or p.get("name", "")).lower()
+    if any(k in title for k in ("box", "pack", "デッキ", "セット", "パック")):
+        return "box_pack"
+    return "single"
+
+
 def _normalize_search_product(p: Dict) -> Dict:
     link = p.get("link", "") or ""
     pid = _product_id_from_link(link)
     sale_jpy = p.get("salePrice")
     sale_hkd = fx.jpy_to_hkd(sale_jpy) if sale_jpy is not None else None
+    product_type = _detect_product_type(p)
     return {
         "id": pid,
         "card_name": p.get("title", "") or p.get("name", ""),
@@ -266,6 +306,8 @@ def _normalize_search_product(p: Dict) -> Dict:
         # 详情接口可用它并行拉取交易履历，避免二次串行请求
         "catalog_id": p.get("productId", ""),
         "product_number": "",
+        "product_type": product_type,
+        "card_type": product_type,
         "is_trading_card": True,
         "_source": "search",
     }
@@ -276,20 +318,25 @@ def search_trading_cards(
     max_results: int = 50,
     per_page: int = 30,
     page_limit: int = 20,
+    product_type: str = "single",
 ) -> List[Dict]:
     """
-    通过 snkrdunk.com/search 搜索商品（固定枚数 = 1枚 quantity_1，不筛商品状态）。
+    通过 snkrdunk.com/search 搜索商品（固定单位数量 = 1，不筛商品状态）。
 
     Args:
         keyword: 关键词（空格分隔多个词自动以 + 连接）
         max_results: 最多返回结果数
         per_page: 每页条数（页面固定 30）
         page_limit: 最多翻页数，防止无限抓取
+        product_type: "single"=卡牌（シングルカード 6/33，1枚）；
+                      "box_pack"=卡包（ボックス・パック 6/26，1個）
 
     Returns:
         商品列表（价格已换算为港币）
     """
     kw = keyword.strip()
+    is_box = product_type == "box_pack"
+    category = SEARCH_CATEGORY_BOX_PACK if is_box else SEARCH_CATEGORY_SINGLE
     # 每次搜索前尝试抓取一次新汇率（成功会写库），失败则用库内最新
     fx.get_hkd_rate(refresh=True)
     results: List[Dict] = []
@@ -297,9 +344,15 @@ def search_trading_cards(
     total_pages: Optional[int] = None
 
     while len(results) < max_results and page <= page_limit:
-        # 固定枚数 = 1枚（quantity_1）；空格需编码为 %20，不能先替换成 + 再用 quote
-        # （quote 会把 + 转成 %2B，导致多词关键词搜不到）
-        q = f"keywords={urllib.request.quote(kw)}&itemSizes=quantity_1&page={page}"
+        # 固定单位数量 = 1（卡牌 1枚 / 卡包 1個，均对应 quantity_1）；
+        # searchCategoryIds 区分卡牌(6/33)与卡包(6/26)，斜杠需编码成 %2F（safe=''）。
+        # 空格需编码为 %20，不能先替换成 + 再用 quote（quote 会把 + 转成 %2B）。
+        q = (
+            f"keywords={urllib.request.quote(kw)}"
+            f"&itemSizes=quantity_1"
+            f"&searchCategoryIds={urllib.request.quote(category, safe='')}"
+            f"&page={page}"
+        )
         url = f"{SEARCH_URL}?{q}"
 
         html = fetch_text(url)
@@ -398,17 +451,22 @@ def _conditions_from_chips(chips: List[Dict]) -> Dict[str, Dict]:
     return result
 
 
-def fetch_latest_sold_prices(catalog_id, timeout: int = 12) -> Optional[Dict[str, Dict]]:
+def fetch_latest_sold_prices(catalog_id, timeout: int = 12,
+                             product_type: str = "single") -> Optional[Dict[str, Dict]]:
     """
     通过 trading-history API（v3/products/{productCatalogId}/trading-history）抓取
-    该商品「1枚」的最新已售成交（默认 variant 即 1枚；若有变才显式带 variant_id）。
+    该商品「最小单位」的最新已售成交：
+      - 卡牌 single：variant 为「枚数」，trades[].label="1枚"、title=等级（A/PSA10…）
+      - 卡包 box_pack：variant 为「個数」，trades[].title="1個"、label=成色（新品S…）
 
     Returns:
-        { 等级: {"sold_price": HKD, "sold_format": "HK$..", "sold_at": ISO时间, ...} }
+        { 等级/成色: {"sold_price": HKD, "sold_format": "HK$..", "sold_at": ISO时间, ...} }
         无交易或失败时返回 None/{}。
     """
     if not catalog_id:
         return None
+    is_box = product_type == "box_pack"
+    unit_name = "1個" if is_box else "1枚"
     url = f"{TRADING_HISTORY_URL.format(product_id=catalog_id)}?range=all"
     payload = fetch_json(url, timeout=timeout)
     if not payload:
@@ -416,38 +474,44 @@ def fetch_latest_sold_prices(catalog_id, timeout: int = 12) -> Optional[Dict[str
 
     trades = payload.get("trades") or []
 
-    # 枚数在返回数据的 filters.variants.options / trades[].label 里；只采计 1枚
+    # 单位数量在 filters.variants.options 里；精确定位「1枚 / 1個」
     one_id = None
     try:
         for o in (payload.get("filters") or {}).get("variants", {}).get("options", []):
-            if str(o.get("name") or "").strip().startswith("1"):
+            if str(o.get("name") or "").strip() == unit_name:
                 one_id = o.get("id")
                 break
     except Exception:
         pass
 
-    labels = {str(t.get("label") or "") for t in trades if t.get("label")}
-    # 默认交易若非 1枚（罕见），用 options 中 1枚 的 variant_id 再取一次
-    if labels and labels != {"1枚"} and one_id:
-        payload = fetch_json(url + f"&variant_id={one_id}", timeout=timeout)
-        if payload:
-            trades = payload.get("trades") or []
+    def _quantities(ts):
+        # 卡牌数量在 label，卡包数量在 title
+        return {str(t.get("title" if is_box else "label") or "") for t in ts}
 
-    latest: Dict[str, tuple] = {}  # title -> (soldAt, price_jpy)
+    qtys = _quantities(trades)
+    # 默认交易若非最小单位（卡包常见，会混入 2個/3個…），用对应 variant_id 再取一次
+    if qtys and qtys != {unit_name} and one_id:
+        payload2 = fetch_json(url + f"&variant_id={one_id}", timeout=timeout)
+        if payload2:
+            trades = payload2.get("trades") or []
+
+    latest: Dict[str, tuple] = {}  # grade -> (soldAt, price_jpy)
     for t in trades:
-        if t.get("label") and str(t.get("label")) != "1枚":
+        qty = str(t.get("title" if is_box else "label") or "").strip()
+        if qty and qty != unit_name:
             continue
-        title = str(t.get("title") or "").strip()
-        if not title:
+        # 卡牌等级在 title，卡包成色在 label
+        grade_raw = str(t.get("label" if is_box else "title") or "").strip()
+        if not grade_raw:
             continue
         sold_at = str(t.get("soldAt") or "")
-        if title not in latest or sold_at > latest[title][0]:
-            latest[title] = (sold_at, t.get("price"))
+        if grade_raw not in latest or sold_at > latest[grade_raw][0]:
+            latest[grade_raw] = (sold_at, t.get("price"))
 
     result: Dict[str, Dict] = {}
-    for title, (sold_at, price_jpy) in latest.items():
+    for grade_raw, (sold_at, price_jpy) in latest.items():
         price_hkd = fx.jpy_to_hkd(price_jpy) if price_jpy is not None else None
-        grade = normalize_grade(title)
+        grade = normalize_grade(grade_raw)
         result[grade] = {
             "sold_price": price_hkd,
             "sold_format": fx.format_hkd(price_hkd),
@@ -543,6 +607,8 @@ def _fetch_detail_impl(card_id: str, timeout: int, catalog_id=None) -> Optional[
     name = summary.get("name", "") or ""
     return {
         "card_id": str(card_id),
+        "product_type": "single",
+        "card_type": "single",
         "url": url,
         "name": name,
         "name_ja": name_ja,
@@ -559,12 +625,129 @@ def _fetch_detail_impl(card_id: str, timeout: int, catalog_id=None) -> Optional[
     }
 
 
+def fetch_pack_detail(pack_id: str, timeout: int = 15, catalog_id=None, fresh: bool = False) -> Optional[Dict]:
+    """
+    抓取卡包（ボックス・パック）详情。
+
+    与卡牌的差异：详情页没有按成色划分的 condition chips，
+    新品最低售价直接取摘要对象的 minPrice（HKD），成交记录来自 trading-history 的
+    「1個」variant（label=成色，通常只有「新品S」）。
+    """
+    key = f"box_pack:{pack_id}"
+    cached = None if fresh else _cache_get_detail(key)
+    if cached is not None:
+        return copy.deepcopy(cached)
+
+    data = _fetch_pack_impl(str(pack_id), timeout=timeout, catalog_id=catalog_id)
+    if data is not None:
+        _cache_put_detail(key, data)
+    return data
+
+
+def _fetch_pack_impl(pack_id: str, timeout: int, catalog_id=None) -> Optional[Dict]:
+    url = DETAIL_URL.format(id=pack_id)
+    html = None
+    sold_map = None
+
+    if catalog_id:
+        bag: Dict = {}
+
+        def _get_html():
+            bag["html"] = fetch_text(url, timeout=timeout)
+
+        def _get_sold():
+            bag["sold"] = fetch_latest_sold_prices(
+                str(catalog_id), timeout=timeout, product_type="box_pack")
+
+        t1 = threading.Thread(target=_get_html)
+        t2 = threading.Thread(target=_get_sold)
+        t1.start(); t2.start(); t1.join(); t2.join()
+        html = bag.get("html")
+        sold_map = bag.get("sold")
+    else:
+        html = fetch_text(url, timeout=timeout)
+
+    if not html:
+        return None
+
+    summary = _parse_product_summary(html)
+    catalog = catalog_id or summary.get("catalog_id")
+    if sold_map is None and catalog:
+        sold_map = fetch_latest_sold_prices(
+            str(catalog), timeout=timeout, product_type="box_pack")
+    sold_map = sold_map or {}
+
+    # 新品最低在售价（卡包没有按成色拆分的在售 chips）
+    new_price_jpy = summary.get("min_price_jpy")
+    new_price_hkd = fx.jpy_to_hkd(new_price_jpy) if new_price_jpy is not None else None
+    regular_hkd = fx.jpy_to_hkd(summary.get("regular_price_jpy")) \
+        if summary.get("regular_price_jpy") is not None else None
+
+    conditions: Dict[str, Dict] = {}
+    grades = set(sold_map.keys())
+    if new_price_hkd is not None:
+        grades.add("S")  # 新品・未開封
+    for grade in grades:
+        sv = sold_map.get(grade)
+        # 只有新品 S 能拿到平台在售价；其它（中古）成色仅有成交记录
+        price_hkd = new_price_hkd if grade == "S" else None
+        conditions[grade] = {
+            "price": price_hkd,
+            "format": fx.format_hkd(price_hkd),
+            "count": 1 if price_hkd is not None else 0,
+            "has_listing": price_hkd is not None,
+            "sold_price": sv.get("sold_price") if sv else None,
+            "sold_format": sv.get("sold_format") if sv else None,
+            "sold_price_jpy": sv.get("sold_price_jpy") if sv else None,
+            "sold_at": sv.get("sold_at") if sv else None,
+            "error": None,
+        }
+
+    # 最低价：优先新品在售；否则取各成色最新成交价
+    if new_price_hkd is not None:
+        min_price = new_price_hkd
+    else:
+        sold_vals = [v["sold_price"] for v in conditions.values() if v.get("sold_price") is not None]
+        min_price = min(sold_vals) if sold_vals else None
+
+    name_ja = summary.get("name_ja", "") or ""
+    name = summary.get("name", "") or ""
+    return {
+        "card_id": str(pack_id),
+        "product_type": "box_pack",
+        "card_type": "box_pack",
+        "url": url,
+        "name": name,
+        "name_ja": name_ja,
+        "card_name": name_ja or name,
+        "brand": summary.get("brand", ""),
+        "product_code": summary.get("product_code", ""),
+        "catalog_id": catalog,
+        "image_url": summary.get("image_url", ""),
+        "listing_count": summary.get("all_listing_count"),
+        "sale_count_text": summary.get("all_listing_count_text", ""),
+        "regular_price": regular_hkd,
+        "min_price": min_price,
+        "min_price_format": fx.format_hkd(min_price),
+        "conditions": conditions,
+    }
+
+
+def fetch_detail(card_id: str, product_type: str = "single",
+                 timeout: int = 15, catalog_id=None, fresh: bool = False) -> Optional[Dict]:
+    """详情统一入口：product_type="box_pack" 走卡包解析，其余走卡牌解析。"""
+    if product_type == "box_pack":
+        return fetch_pack_detail(card_id, timeout=timeout, catalog_id=catalog_id, fresh=fresh)
+    return fetch_card_detail(card_id, timeout=timeout, catalog_id=catalog_id, fresh=fresh)
+
+
 def fetch_condition_prices(
     card_id: str,
     card_data: Optional[Dict] = None,
     timeout: int = 10,
     fresh: bool = False,
     catalog_id=None,
+    product_type: str = "single",
 ) -> Dict[str, Dict]:
     """
     获取商品每个状态的成色价格字典（含 price=当前最低在售价、sold_price=最新已售(1枚)，
@@ -577,7 +760,8 @@ def fetch_condition_prices(
     Returns:
         { 等级: {"price", "format", "sold_price", "sold_format", "sold_at", "count", ...} }
     """
-    detail = fetch_card_detail(card_id, timeout=timeout, catalog_id=catalog_id, fresh=fresh)
+    detail = fetch_detail(card_id, product_type=product_type, timeout=timeout,
+                          catalog_id=catalog_id, fresh=fresh)
     if not detail:
         return {}
     return detail.get("conditions", {})
@@ -600,11 +784,74 @@ def condition_effective_price(v: Optional[Dict]) -> tuple:
     return None, None
 
 
-def fetch_product_detail(card_id: str, timeout: int = 15) -> Optional[Dict]:
+def _fetch_pack_product_detail(pack_id: str, timeout: int = 15) -> Optional[Dict]:
+    """卡包爬取：返回与卡牌爬取结果同构的数据字典（供 Web 爬取 / 导入 MySQL）。"""
+    d = fetch_pack_detail(pack_id, timeout=timeout, fresh=True)
+    if not d:
+        return None
+
+    conditions = d.get("conditions") or {}
+    # 默认选中成色：优先新品 S，否则取第一个有有效价的成色
+    deal_condition = None
+    if conditions.get("S"):
+        deal_condition = "S"
+    else:
+        for g, v in conditions.items():
+            if condition_effective_price(v)[0] is not None:
+                deal_condition = g
+                break
+    deal_price, deal_format = (None, "-")
+    if deal_condition and conditions.get(deal_condition):
+        deal_price, deal_format = condition_effective_price(conditions[deal_condition])
+
+    available_prices = [
+        p for v in conditions.values()
+        for p in (condition_effective_price(v)[0],) if p is not None
+    ]
+    min_price = d.get("min_price")
+    if min_price is None and available_prices:
+        min_price = min(available_prices)
+
+    card_name = d.get("card_name") or d.get("name_ja") or d.get("name") or ""
+    img = d.get("image_url") or ""
+    return {
+        "id": str(pack_id),
+        "url": d.get("url") or DETAIL_URL.format(id=pack_id),
+        "title": d.get("name_ja") or d.get("name") or "",
+        "card_name": card_name,
+        "brand": d.get("brand", ""),
+        "category": "",
+        "min_price": min_price,
+        "product_code": d.get("product_code", ""),
+        "thumbnail_url": img,
+        "card_type": "box_pack",
+        "product_type": "box_pack",
+        "description": "",
+        "listing_count": d.get("listing_count"),
+        "in_stock_count": d.get("listing_count"),
+        "offer_count": "",
+        "image_urls": [img] if img else [],
+        "image_count": 1 if img else 0,
+        "condition_prices": conditions,
+        "deal_condition": deal_condition or "",
+        "deal_price": deal_price,
+        "deal_format": deal_format or "-",
+        "currency": "HKD",
+        "_source": "new_site_box_pack",
+    }
+
+
+def fetch_product_detail(card_id: str, timeout: int = 15,
+                         product_type: str = "single") -> Optional[Dict]:
     """
     爬取商品详情并返回与旧模型兼容的数据字典（一次请求完成，价格已换算为港币）。
     主要用途：Web 爬取 / 导入 MySQL。
+
+    product_type="box_pack" 时走卡包解析（无成色 chips，只有新品 S 价格）。
     """
+    if product_type == "box_pack":
+        return _fetch_pack_product_detail(card_id, timeout=timeout)
+
     url = DETAIL_URL.format(id=card_id)
     html = fetch_text(url, timeout=timeout)
     if not html:

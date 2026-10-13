@@ -179,16 +179,20 @@ body {
     <div class="card" style="width:100%;max-width:none">
       <h2>搜索交易卡</h2>
       <div class="form-row">
+        <select id="productType" style="flex:0 0 150px;min-width:150px" onchange="onProductTypeChange()">
+          <option value="single">🃏 卡牌（シングル）</option>
+          <option value="box_pack">📦 卡包（ボックス・パック）</option>
+        </select>
         <input type="text" id="searchInput" placeholder="关键词，如: sv8 pikachu 136" value=""
                onkeydown="if(event.key==='Enter') doSearch()">
-        <select id="maxResults">
+        <select id="maxResults" style="flex:0 0 110px;min-width:110px">
           <option value="20">20 条</option>
           <option value="50" selected>50 条</option>
           <option value="100">100 条</option>
           <option value="200">200 条</option>
         </select>
         <button class="btn btn-primary" onclick="doSearch()">搜索</button>
-        <span class="text-muted" style="font-size:12px;align-self:center">枚数固定：1 枚</span>
+        <span class="text-muted" id="unitHint" style="font-size:12px;align-self:center">枚数固定：1 枚</span>
       </div>
     </div>
 
@@ -211,7 +215,7 @@ body {
           </label>
         </div>
       </div>
-      <div style="color:var(--text-muted);font-size:11px;margin:-6px 0 8px;line-height:1.6">
+      <div id="searchNote" style="color:var(--text-muted);font-size:11px;margin:-6px 0 8px;line-height:1.6">
         注：成色价格显示为最新已售(1枚)。由于平台接口限制只返回最近约 20 笔成交，个别成色若一段时间没有成交，
         会退回显示当前在售价。
       </div>
@@ -318,6 +322,7 @@ body {
       <input type="text" id="statsNameFilter" placeholder="🔍 搜索名称..." style="width:30%;max-width:260px;flex-shrink:0;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px" oninput="filterStats()">
       <select id="statsConditionFilter" style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px" onchange="filterStats()">
         <option value="">全部成色</option>
+        <option value="S">S 新品（卡包）</option>
         <option value="A">A</option>
         <option value="B">B</option>
         <option value="C">C</option>
@@ -356,16 +361,37 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // ============================================================
 let searchResults = [];
 
+function getProductType() {
+  return document.getElementById('productType').value === 'box_pack' ? 'box_pack' : 'single';
+}
+
+// 数量单位：卡牌按「张」、卡包按「个」；成交单位分别是 1枚 / 1個
+function unitWord(ptype) {
+  return ptype === 'box_pack' ? '个' : '张';
+}
+
+function onProductTypeChange() {
+  const ptype = getProductType();
+  const isBox = ptype === 'box_pack';
+  document.getElementById('unitHint').textContent = isBox ? '单位固定：1 個（盒/包）' : '枚数固定：1 枚';
+  document.getElementById('searchInput').placeholder = isBox
+    ? '关键词，如: 黒炎の支配者 box' : '关键词，如: sv8 pikachu 136';
+  document.getElementById('searchNote').innerHTML = isBox
+    ? '注：卡包（Box/Pack）无成色分级，价格为「新品(S)」最新已售(1個)；无成交记录时退回当前在售价。'
+    : '注：成色价格显示为最新已售(1枚)。由于平台接口限制只返回最近约 20 笔成交，个别成色若一段时间没有成交，会退回显示当前在售价。';
+}
+
 async function doSearch() {
   const keyword = document.getElementById('searchInput').value.trim();
   const max = document.getElementById('maxResults').value;
+  const ptype = getProductType();
   if (!keyword) return toast('请输入关键词', 'error');
 
-  const btn = document.querySelector('.btn-primary');
+  const btn = document.querySelector('#tab-search .btn-primary');
   btn.disabled = true; btn.innerHTML = '<span class="loading"></span> 搜索中...';
 
   try {
-    const res = await fetch(`/api/search?keyword=${encodeURIComponent(keyword)}&max=${max}`);
+    const res = await fetch(`/api/search?keyword=${encodeURIComponent(keyword)}&max=${max}&type=${ptype}`);
     const data = await res.json();
     if (data.error) { toast(data.error, 'error'); searchResults = []; }
     else { searchResults = data.results; }
@@ -384,11 +410,14 @@ function renderSearchResults(results) {
   const tbody = document.getElementById('searchTableBody');
   const count = document.getElementById('resultCount');
 
+  const ptype = getProductType();
   if (!results.length) {
     el.style.display = 'none';
     if (emptyEl) {
       const hint = document.getElementById('searchEmptyHint');
-      if (hint) hint.textContent = '请换其他关键词再试。（搜索固定枚数为 1 枚）';
+      if (hint) hint.textContent = ptype === 'box_pack'
+        ? '请换其他关键词再试。（卡包搜索固定单位为 1 個）'
+        : '请换其他关键词再试。（搜索固定枚数为 1 枚）';
       emptyEl.style.display = 'block';
     }
     return;
@@ -396,7 +425,7 @@ function renderSearchResults(results) {
 
   if (emptyEl) emptyEl.style.display = 'none';
   el.style.display = 'block';
-  count.textContent = `共 ${results.length} 张卡片`;
+  count.textContent = `共 ${results.length} ${unitWord(ptype)}${ptype === 'box_pack' ? '卡包' : '卡片'}`;
 
   tbody.innerHTML = results.map((r, idx) => `
     <tr data-idx="${idx}" class="card-main-row">
@@ -435,9 +464,10 @@ function renderSearchResults(results) {
 // ============================================================
 const condCache = {};    // card_id -> {conditions, card_name, brand, product_code, image_url, ...}
 const cardCatalog = {};  // card_id -> productCatalogId（搜索 payload 的 productId，用于并行抓取）
+const cardTypes = {};    // card_id -> 'single' | 'box_pack'
 if (!window._searchSeq) window._searchSeq = 0;
 
-const GRADE_ORDER = ['A','B','C','D','PSA 10','PSA 9','PSA 8 or under',
+const GRADE_ORDER = ['S','A','B','C','D','PSA 10','PSA 9','PSA 8 or under',
                      'BGS 10 BL','BGS 10 GL','BGS 9.5','BGS 9 or under',
                      'ARS 10+','ARS 10','ARS 9','ARS 8 or under','Other'];
 
@@ -447,9 +477,10 @@ async function loadSearchDetails(results) {
   const countEl = document.getElementById('resultCount');
   const CHUNK = 10;
 
-  // 记录 catalog_id（已知则让后端并行抓详情页与交易履历）
+  // 记录 catalog_id（已知则让后端并行抓详情页与交易履历）与商品类型
   results.forEach(r => {
     if (r.catalog_id) cardCatalog[r.id] = r.catalog_id;
+    cardTypes[r.id] = r.product_type === 'box_pack' ? 'box_pack' : 'single';
     if (condCache[r.id]) renderConditionDetail(r.id, condCache[r.id]);  // 命中缓存直接渲染
   });
   const pending = results.filter(r => !condCache[r.id]);
@@ -458,8 +489,13 @@ async function loadSearchDetails(results) {
   for (let i = 0; i < pending.length; i += CHUNK) {
     if (window._searchSeq !== seq) return;  // 已有新一轮搜索，丢弃旧请求
     const chunk = pending.slice(i, i + CHUNK);
-    if (countEl) countEl.textContent = `共 ${results.length} 张卡片 · 详情 ${Math.min(i + CHUNK, pending.length)}/${pending.length}`;
-    const items = chunk.map(r => ({ id: r.id, catalog_id: cardCatalog[r.id] || r.catalog_id || '' }));
+    const _pt = getProductType();
+    if (countEl) countEl.textContent = `共 ${results.length} ${unitWord(_pt)}${_pt === 'box_pack' ? '卡包' : '卡片'} · 详情 ${Math.min(i + CHUNK, pending.length)}/${pending.length}`;
+    const items = chunk.map(r => ({
+      id: r.id,
+      catalog_id: cardCatalog[r.id] || r.catalog_id || '',
+      product_type: cardTypes[r.id] || 'single',
+    }));
     try {
       const res = await fetch('/api/search-details', {
         method: 'POST',
@@ -483,7 +519,10 @@ async function loadSearchDetails(results) {
       });
     }
   }
-  if (window._searchSeq === seq && countEl) countEl.textContent = `共 ${results.length} 张卡片`;
+  if (window._searchSeq === seq && countEl) {
+    const _pt = getProductType();
+    countEl.textContent = `共 ${results.length} ${unitWord(_pt)}${_pt === 'box_pack' ? '卡包' : '卡片'}`;
+  }
 }
 
 async function loadConditionPrices(cardId) {
@@ -496,8 +535,10 @@ async function loadConditionPrices(cardId) {
   if (!box) return;
 
   try {
-    const cat = cardCatalog[cardId] ? `?catalog=${cardCatalog[cardId]}` : '';
-    const res = await fetch(`/api/conditions/${cardId}${cat}`, { timeout: 30000 });
+    const qs = [];
+    if (cardCatalog[cardId]) qs.push(`catalog=${encodeURIComponent(cardCatalog[cardId])}`);
+    qs.push(`type=${cardTypes[cardId] === 'box_pack' ? 'box_pack' : 'single'}`);
+    const res = await fetch(`/api/conditions/${cardId}?${qs.join('&')}`, { timeout: 30000 });
     const data = await res.json();
     if (data.error) {
       box.innerHTML = `<span style="color:#ef4444">详情获取失败: ${escapeHtml(data.error)}</span>`;
@@ -515,43 +556,54 @@ function renderConditionDetail(cardId, d) {
   if (!container) return;
 
   const conditions = d.conditions || {};
+  const isBox = d.product_type === 'box_pack' || cardTypes[cardId] === 'box_pack';
   if (!window._condSelections) window._condSelections = {};
   const selected = window._condSelections[cardId] || null;
 
   const metaParts = [];
   if (d.brand) metaParts.push(d.brand);
   if (d.product_code) metaParts.push(`品番: ${d.product_code}`);
-  if (d.listing_count != null) metaParts.push(`在售 ${d.listing_count} 件`);
+  if (d.listing_count != null) metaParts.push(`在售 ${d.listing_count} ${isBox ? '個' : '件'}`);
+  if (isBox && d.regular_price != null) metaParts.push(`定価 ${fmtHKD(d.regular_price)}`);
   const meta = metaParts.join(' · ');
+
+  // 卡包无成色分级（通常仅新品 S），直接按返回键渲染；卡牌按固定成色顺序
+  const gradeKeys = isBox
+    ? Object.keys(conditions).sort((a, b) => a === 'S' ? -1 : b === 'S' ? 1 : a.localeCompare(b))
+    : GRADE_ORDER;
 
   // 成色框顶部只显示一行「品牌 · 品番 · 在售 N 件」，下面直接是各成色
   const header = meta
     ? `<div style="color:var(--text-muted);font-size:12px;margin-bottom:4px">${escapeHtml(meta)}</div>`
     : '';
 
-  const chips = GRADE_ORDER.map(g => {
+  const unitLabel = isBox ? '1個' : '1枚';
+  const chips = gradeKeys.map(g => {
     const c = conditions[g];
     if (!c) return '';
-    const has = c.has_listing && c.price != null;      // 当前是否在库（决定能否爬取）
+    const has = c.has_listing && c.price != null;      // 当前是否在库
     const soldOk = c.sold_price != null;               // 是否有最新已售记录
+    // 卡包即使当前无在售，只要有最新成交价也允许选择；卡牌维持原有「在售才可选」
+    const canPick = isBox ? (has || soldOk) : has;
     // 价格优先显示「最新已售」；无已售记录时退回显示当前在售价
     const price = soldOk ? fmtHKD(c.sold_price) : (has ? fmtHKD(c.price) : '-');
+    const gradeLabel = isBox && g === 'S' ? 'S 新品' : g;
     const isChecked = selected === g;
     let style = 'display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin:3px 6px 3px 0;padding:3px 8px;border-radius:6px;border:1px solid var(--border);font-size:12px;';
     if (isChecked) style += 'background:var(--primary);color:#fff;border-color:var(--primary)';
-    else if (!has) style += 'opacity:.55;background:var(--bg-input);color:var(--text-muted);cursor:not-allowed';
+    else if (!canPick) style += 'opacity:.55;background:var(--bg-input);color:var(--text-muted);cursor:not-allowed';
     else style += 'background:var(--bg-input);color:var(--text)';
 
     const stockText = has ? '在售' : '缺货';
     const dateText = soldOk ? fmtSoldDate(c.sold_at) : '';
-    const tip = `${g}${soldOk ? ' · 最新已售 ' + fmtSoldFull(c.sold_at) : (has ? ' · 暂无已售记录，显示当前在售价' : ' · 缺货')}`;
+    const tip = `${gradeLabel}${soldOk ? ' · 最新已售(' + unitLabel + ') ' + fmtSoldFull(c.sold_at) : (has ? ' · 暂无已售记录，显示当前在售价' : ' · 缺货')}`;
     return `<label style="${style}" title="${escapeHtml(tip)}">
       <input type="radio" name="cond-${cardId}" value="${g}"
              ${isChecked ? 'checked' : ''}
-             ${has ? '' : 'disabled'}
+             ${canPick ? '' : 'disabled'}
              onchange="selectCondition('${cardId}', '${g}')"
              style="display:none">
-      <span style="font-weight:600">${g}</span>
+      <span style="font-weight:600">${gradeLabel}</span>
       <span>${price}</span>
       ${soldOk
         ? `<span style="font-size:10px;opacity:.8">已售${dateText}</span>`
@@ -584,11 +636,23 @@ async function crawlSelected() {
   // 收集全部成色价格 + 选中的成色
   const conditions = {};
   ids.forEach(cid => {
+    const ptype = cardTypes[cid] === 'box_pack' ? 'box_pack' : 'single';
     if (condCache[cid]) {
+      let selected = (window._condSelections && window._condSelections[cid]) || null;
+      // 卡包无成色分级，未手动选择时默认取新品 S（无 S 则取第一个有有效价的成色）
+      if (!selected && ptype === 'box_pack') {
+        const cs = condCache[cid].conditions || {};
+        if (cs['S']) selected = 'S';
+        else selected = Object.keys(cs)[0] || null;
+      }
       conditions[cid] = {
         all_prices: condCache[cid].conditions || {},  // 所有成色价格
-        selected: window._condSelections && window._condSelections[cid] || null,  // 选中的等级
+        selected: selected,                            // 选中的等级
+        product_type: ptype,                           // single / box_pack
       };
+    } else {
+      // 详情未加载完成时也把类型传给后端，由后端自行抓取详情
+      conditions[cid] = {all_prices: null, selected: null, product_type: ptype};
     }
   });
 
@@ -632,7 +696,7 @@ function pollCrawlStatus(total) {
       if (!status.running || status.done >= total) {
         clearInterval(interval);
         btn.disabled = false; btn.textContent = '爬取选中';
-        toast(`爬取完成: 共处理 ${total} 张`, 'success');
+        toast(`爬取完成: 共处理 ${total} 项`, 'success');
         loadData();
         loadStats();
         setTimeout(() => {

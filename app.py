@@ -18,7 +18,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scraper.search_api import search_trading_cards, fetch_condition_prices, fetch_product_detail, fetch_card_detail, condition_effective_price
+from scraper.search_api import search_trading_cards, fetch_condition_prices, fetch_product_detail, fetch_detail, condition_effective_price
 
 # MySQL 导入功能（可选依赖）
 try:
@@ -170,18 +170,23 @@ def index():
 @app.route("/api/search")
 @api_login_required
 def api_search():
-    """搜索交易卡（新站 snkrdunk.com/search，固定枚数 = 1枚）"""
+    """搜索交易卡（新站 snkrdunk.com/search）
+    type=single 卡牌（固定 1枚，分类 6/33）；type=box_pack 卡包（固定 1個，分类 6/26）"""
     keyword = request.args.get("keyword", "").strip()
     max_results = int(request.args.get("max", 50))
+    product_type = request.args.get("type", "single").strip()
+    if product_type not in ("single", "box_pack"):
+        product_type = "single"
 
     if not keyword:
         return jsonify({"error": "请输入关键词"}), 400
 
     try:
-        results = search_trading_cards(keyword, max_results=max_results)
+        results = search_trading_cards(keyword, max_results=max_results, product_type=product_type)
         return jsonify({
             "success": True,
             "keyword": keyword,
+            "type": product_type,
             "count": len(results),
             "results": results,
         })
@@ -392,7 +397,10 @@ def api_condition_prices(card_id):
     可选 ?catalog={productCatalogId}：已知 catalog 时详情页与交易履历并行抓取，加载更快。"""
     try:
         catalog = request.args.get("catalog") or None
-        detail = fetch_card_detail(card_id, catalog_id=catalog)
+        product_type = request.args.get("type", "single").strip()
+        if product_type not in ("single", "box_pack"):
+            product_type = "single"
+        detail = fetch_detail(card_id, product_type=product_type, catalog_id=catalog)
         if detail is None:
             return jsonify({"error": f"抓取详情失败（ID={card_id}），请确认该商品存在"}), 502
         return jsonify({"success": True, **detail})
@@ -418,8 +426,11 @@ def api_search_details():
         if not cid:
             return cid, None
         catalog = item.get("catalog_id") or None
+        product_type = item.get("product_type") or "single"
+        if product_type not in ("single", "box_pack"):
+            product_type = "single"
         try:
-            detail = fetch_card_detail(cid, timeout=15, catalog_id=catalog)
+            detail = fetch_detail(cid, product_type=product_type, timeout=15, catalog_id=catalog)
             return cid, detail
         except Exception as e:
             print(f"[SEARCH-DETAILS] {cid} 失败: {e}")
@@ -548,13 +559,18 @@ def _do_crawl(card_ids, conditions_map=None):
             crawl_status["done"] = i
             crawl_status["progress"] = f"正在爬取 [{i+1}/{len(card_ids)}] ID={cid}"
 
-            data = fetch_product_detail(cid)
+            # 前端可传入该商品类型：single=卡牌 / box_pack=卡包
+            product_type = "single"
+            cond = (conditions_map or {}).get(cid) or {}
+            if cond.get("product_type") in ("single", "box_pack"):
+                product_type = cond["product_type"]
+
+            data = fetch_product_detail(cid, product_type=product_type)
 
             if data:
                 crawl_status["match"] += 1
                 # 使用前端传入的状态价格（如有）
                 if conditions_map and cid in conditions_map:
-                    cond = conditions_map[cid]
                     if cond.get("all_prices"):
                         data["condition_prices"] = cond["all_prices"]
                     selected_grade = cond.get("selected")
@@ -566,6 +582,9 @@ def _do_crawl(card_ids, conditions_map=None):
                             data["deal_price"] = eff_price
                             data["deal_format"] = eff_format or f"${eff_price:.2f}"
                             data["deal_condition"] = selected_grade
+                # 兜底确保类型字段与所选分类一致
+                data.setdefault("card_type", product_type)
+                data["card_type"] = product_type
                 new_cards.append(data)
 
             time.sleep(0.8)
@@ -699,7 +718,13 @@ def _run_price_update():
     for i, card in enumerate(unique):
         cid = card["id"]
         try:
-            prices = fetch_condition_prices(cid, timeout=8, fresh=True)
+            # 卡包（card_type=box_pack）按卡包逻辑刷新，其余按卡牌逻辑；
+            # 历史数据 card_type 可能不准，抓不到价格时用另一类型兜底
+            product_type = "box_pack" if card.get("card_type") == "box_pack" else "single"
+            prices = fetch_condition_prices(cid, timeout=8, fresh=True, product_type=product_type)
+            if not prices:
+                fallback_type = "single" if product_type == "box_pack" else "box_pack"
+                prices = fetch_condition_prices(cid, timeout=8, fresh=True, product_type=fallback_type)
             if prices:
                 # 有效成交价 = 最新已售(1枚)优先，无已售记录退回当前在售价
                 eff = {}
@@ -931,10 +956,15 @@ def api_stats_update_card():
         if not existing:
             return jsonify({"success": False, "error": f"数据库未找到 crawler_id={card_id} 的记录"}), 404
         old_condition = existing[0].get("deal_condition") or ""
+        product_type = "box_pack" if existing[0].get("card_type") == "box_pack" else "single"
 
-        prices = fetch_condition_prices(card_id, timeout=15, fresh=True)
+        prices = fetch_condition_prices(card_id, timeout=15, fresh=True, product_type=product_type)
         if not prices:
-            return jsonify({"success": False, "error": "抓取不到该卡片价格，可能已下架或无在售"}), 502
+            # card_type 可能不准（历史数据），用另一类型兜底
+            fallback_type = "single" if product_type == "box_pack" else "box_pack"
+            prices = fetch_condition_prices(card_id, timeout=15, fresh=True, product_type=fallback_type)
+        if not prices:
+            return jsonify({"success": False, "error": "抓取不到该商品价格，可能已下架或无在售"}), 502
 
         # 有效成交价 = 最新已售(1枚)优先，无已售记录退回当前在售价
         eff = {}
