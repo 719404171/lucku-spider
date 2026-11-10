@@ -12,3 +12,8 @@ __pycache__/
 
 # 运行时数据与缓存
 data/*.log
+data/auth.json
+
+# 打包产物
+deploy_v2.zip
+*.zip
