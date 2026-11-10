@@ -12,8 +12,12 @@ from typing import Dict, List, Optional
 import pymysql
 
 # 数据库配置（优先从环境变量读取）
+#   内网地址（部署在阿里云同地域 ECS 时使用，默认）:
+#     rm-3ns7426pw8tx40xg3.mysql.cnhk.rds.aliyuncs.com
+#   外网地址（本机开发/外部访问时用 DB_HOST 环境变量覆盖）:
+#     rm-3ns7426pw8tx40xg38o.mysql.cnhk.rds.aliyuncs.com
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "rm-3ns4xjj7c1qu4q1t3io.mysql.cnhk.rds.aliyuncs.com"),
+    "host": os.getenv("DB_HOST", "rm-3ns7426pw8tx40xg3.mysql.cnhk.rds.aliyuncs.com"),
     "port": int(os.getenv("DB_PORT", "3306")),
     "database": os.getenv("DB_DATABASE", "luckutcgb0f140d7"),
     "user": os.getenv("DB_USERNAME", "luckutcgvdvtr2g3"),
