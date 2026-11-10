@@ -5,6 +5,7 @@ SNKRDUNK Trading Card Web UI - Flask 后端
 import functools
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -1050,28 +1051,73 @@ def api_change_password():
 
 
 # ============================================================
-#  远程重启（给 systemd 服务用，延迟 1 秒执行让 HTTP 响应先返回）
+#  远程重启
+#    依次尝试：RESTART_CMD 环境变量 > gunicorn 优雅重载 > systemd
+#    - RESTART_CMD：完全自定义（宝塔/Docker/其他进程管理器可自行指定）
+#    - gunicorn：向 master 发 SIGHUP 平滑重启 worker，无需 root；
+#      宝塔「Python 项目」默认用 gunicorn 托管，走的就是这条。
+#      注意：若启动时加了 --preload，SIGHUP 不会重新加载代码，
+#      此时请改用 RESTART_CMD 或在面板上重启。
+#    - systemd：systemctl restart $SERVICE_NAME（默认 spidercard）
 # ============================================================
+
+def _gunicorn_master_pid():
+    """当前进程若由 gunicorn 托管，返回其 master PID（worker 的父进程）"""
+    if os.name != "posix" or not hasattr(signal, "SIGHUP"):
+        return None
+    ppid = os.getppid()
+    if ppid <= 1:
+        return None
+    try:
+        with open(f"/proc/{ppid}/cmdline", "rb") as f:
+            cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+    except OSError:
+        return None
+    return ppid if "gunicorn" in cmdline else None
+
+
+def _systemd_unit_exists(name: str) -> bool:
+    for d in ("/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system"):
+        if os.path.exists(os.path.join(d, f"{name}.service")):
+            return True
+    return False
+
 
 @app.route("/api/restart", methods=["POST"])
 @api_login_required
 def api_restart():
-    """一键重启服务（systemd restart spidercard）"""
+    """一键重启服务（按运行环境自动选择方式）"""
+    custom = os.getenv("RESTART_CMD")
     service_name = os.getenv("SERVICE_NAME", "spidercard")
+    gun_pid = _gunicorn_master_pid()
+
+    if custom:
+        label = f"自定义命令: {custom}"
+        action = lambda: subprocess.run(custom, shell=True, capture_output=True, timeout=30)
+    elif gun_pid:
+        label = f"gunicorn 优雅重载 (pid {gun_pid})"
+        action = lambda: os.kill(gun_pid, signal.SIGHUP)
+    elif _systemd_unit_exists(service_name):
+        label = f"systemctl restart {service_name}"
+        action = lambda: subprocess.run(
+            ["systemctl", "restart", service_name], capture_output=True
+        )
+    else:
+        return jsonify({
+            "success": False,
+            "error": "未找到可用的重启方式：请设置 RESTART_CMD 环境变量，"
+                     "或用 gunicorn / systemd 启动服务",
+        }), 400
 
     def _do_restart():
         time.sleep(1)  # 等当前 HTTP 响应返回
         try:
-            subprocess.run(
-                ["systemctl", "restart", service_name],
-                check=False,
-                capture_output=True,
-            )
-        except Exception:
-            pass
+            action()
+        except Exception as e:
+            print(f"[restart] 执行失败（{label}）: {e}")
 
     threading.Thread(target=_do_restart, daemon=True).start()
-    return jsonify({"success": True, "message": "服务即将重启，稍候 3-5 秒后自动刷新..."})
+    return jsonify({"success": True, "message": f"服务即将重启（{label}），稍候 3-5 秒后自动刷新..."})
 
 
 # ============================================================
